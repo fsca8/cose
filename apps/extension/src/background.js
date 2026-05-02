@@ -2,6 +2,8 @@
 import { PLATFORMS, LOGIN_CHECK_CONFIG, SYNC_HANDLERS } from '@cose/core/src/platforms/index.js'
 import { qianfanIntercept } from '@cose/core/src/platforms/qianfan.js'
 import { convertAvatarToBase64 } from '@cose/detection/src/utils.js'
+import { downloadAllImages, serializeImageCache, extractDataUrlImages, stripDataUrlImages, replaceImagesViaPaste } from '@cose/core/src/image-utils.js'
+import { injectUtils } from '@cose/core/src/utils.js'
 // [DISABLED] import { fillAlipayOpenContent } from '@cose/core/src/platforms/alipayopen.js'
 
 // ===== Offscreen helper =====
@@ -661,6 +663,33 @@ async function syncToPlatform(platformId, content) {
   }
 
   try {
+    // 预下载所有外部图片（只下载一次，序列化后传给各平台复用）
+    let serializedImageCache = {}
+    try {
+      const imageCache = await downloadAllImages(content)
+      if (imageCache.size > 0) {
+        Object.assign(serializedImageCache, await serializeImageCache(imageCache))
+      }
+    } catch (err) {
+      console.warn(`[COSE] 图片预下载失败，将在各平台降级处理:`, err.message)
+    }
+
+    // 提取 data URL 图片（无需下载，直接加入缓存）
+    const dataUrlImages = extractDataUrlImages(content)
+    if (dataUrlImages.length > 0) {
+      for (const dataUrl of dataUrlImages) {
+        const ext = dataUrl.match(/image\/([a-zA-Z]+)/)?.[1] || 'png'
+        serializedImageCache[dataUrl] = { dataUrl, filename: `image.${ext}`, mimeType: `image/${ext}` }
+      }
+      console.log(`[COSE] 提取到 ${dataUrlImages.length} 张 data URL 图片`)
+    }
+
+    if (Object.keys(serializedImageCache).length > 0) {
+      console.log(`[COSE] 图片缓存已准备: ${Object.keys(serializedImageCache).length} 张`)
+    } else {
+      serializedImageCache = null
+    }
+
     let tab
 
     // 检查是否有平台特定的同步处理器
@@ -678,6 +707,7 @@ async function syncToPlatform(platformId, content) {
         waitForTab,
         addTabToSyncGroup,
         PLATFORMS,
+        imageCache: serializedImageCache,
       }
       return await syncHandler(tab, content, helpers)
     }
@@ -779,6 +809,9 @@ async function syncToPlatform(platformId, content) {
       // 等待页面加载完成
       await new Promise(resolve => setTimeout(resolve, 3000))
 
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
+
       // 在页面中执行：点击"新的创作"并等待编辑器加载
       const clickResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
@@ -827,12 +860,10 @@ async function syncToPlatform(platformId, content) {
       const htmlContent = content.wechatHtml || content.body
       console.log('[COSE] 小红书 HTML 内容长度:', htmlContent?.length || 0)
 
-      // 填充标题和内容
+      // 填充标题和内容（含图片粘贴替换）
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: async (title, htmlBody) => {
-          const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
-
+        func: async (title, htmlBody, imageCache) => {
           // 等待元素出现的工具函数
           const waitForElement = (selector, timeout = 15000) => {
             return new Promise((resolve) => {
@@ -862,7 +893,6 @@ async function syncToPlatform(platformId, content) {
             const titleInput = await waitForElement('input[placeholder*="标题"], textarea[placeholder*="标题"], .title-input', 5000)
             if (titleInput && title) {
               titleInput.focus()
-              // 使用 native setter 确保 React/Vue 等框架能检测到变化
               const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
               if (nativeSetter) {
                 nativeSetter.call(titleInput, title)
@@ -889,32 +919,11 @@ async function syncToPlatform(platformId, content) {
                 contentEditor.innerHTML = ''
               }
 
-              // 使用 ClipboardEvent + DataTransfer 注入 HTML
-              const dt = new DataTransfer()
-              dt.setData('text/html', htmlBody)
-              dt.setData('text/plain', htmlBody.replace(/<[^>]*>/g, ''))
+              // 注入 HTML 内容（自动处理图片）
+              const { wordCount, imageCount } = await window.injectHtmlWithImages(contentEditor, htmlBody, imageCache)
+              console.log(`[COSE] 小红书内容已注入: ${wordCount} 字, ${imageCount} 张图片`)
 
-              const pasteEvent = new ClipboardEvent('paste', {
-                bubbles: true,
-                cancelable: true,
-                clipboardData: dt
-              })
-
-              contentEditor.dispatchEvent(pasteEvent)
-              console.log('[COSE] 小红书内容已通过 paste 事件注入')
-
-              // 等待内容渲染
-              await new Promise(r => setTimeout(r, 500))
-
-              // 验证内容是否注入成功
-              const wordCount = contentEditor.textContent?.length || 0
-              if (wordCount === 0) {
-                // 备用方案：直接设置 innerHTML
-                console.log('[COSE] paste 事件未生效，尝试备用方案')
-                contentEditor.innerHTML = htmlBody
-              }
-
-              return { success: true, method: 'paste-html', length: htmlBody.length }
+              return { success: true, method: 'paste-html', length: htmlBody.length, images: imageCount }
             }
 
             return { success: false, error: 'Content editor not found' }
@@ -923,15 +932,16 @@ async function syncToPlatform(platformId, content) {
             return { success: false, error: e.message }
           }
         },
-        args: [content.title, htmlContent],
+        args: [content.title, htmlContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      console.log('[COSE] 小红书填充结果:', fillResult[0]?.result)
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || '小红书内容填充失败', tabId: tab.id }
+      }
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
+      console.log('[COSE] 小红书内容填充成功，图片:', result.images || 0)
       return { success: true, message: '已同步到小红书', tabId: tab.id }
     } else if (platformId === 'twitter') {
       // Twitter Articles：需要先打开草稿列表页，然后点击 create 按钮创建新文章
@@ -948,6 +958,9 @@ async function syncToPlatform(platformId, content) {
 
       // 等待页面加载
       await new Promise(resolve => setTimeout(resolve, 1000))
+
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
 
       // 第二步：点击 create 按钮并等待编辑器加载完成
       const clickResult = await chrome.scripting.executeScript({
@@ -1008,10 +1021,10 @@ async function syncToPlatform(platformId, content) {
       const markdownContent = content.markdown || content.body || ''
       console.log('[COSE] Twitter Articles Markdown 内容长度:', markdownContent?.length || 0)
 
-      // 第三步：填充标题和内容
+      // 第三步：填充标题和内容（含图片粘贴替换）
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: async (title, markdown) => {
+        func: async (title, markdown, imageCache) => {
           // ========== 工具函数 ==========
           const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -1241,19 +1254,11 @@ async function syncToPlatform(platformId, content) {
             if (contentEl && htmlContent) {
               contentEl.focus()
 
-              const dt = new DataTransfer()
-              dt.setData('text/html', htmlContent)
-              dt.setData('text/plain', htmlContent.replace(/<[^>]*>/g, ''))
+              // 注入 HTML 内容（自动处理图片）
+              const { imageCount } = await window.injectHtmlWithImages(contentEl, htmlContent, imageCache)
+              console.log(`[COSE] Twitter Articles 内容已注入, ${imageCount} 张图片`)
 
-              const pasteEvent = new ClipboardEvent('paste', {
-                bubbles: true,
-                cancelable: true,
-                clipboardData: dt
-              })
-
-              contentEl.dispatchEvent(pasteEvent)
-              console.log('[COSE] Twitter Articles 内容填充成功')
-              return { success: true, method: 'paste-html', length: htmlContent.length }
+              return { success: true, method: 'paste-html', length: htmlContent.length, images: imageCount }
             } else {
               console.log('[COSE] Twitter Articles 未找到内容编辑器')
               return { success: false, error: 'Content editor not found' }
@@ -1263,15 +1268,16 @@ async function syncToPlatform(platformId, content) {
             return { success: false, error: e.message }
           }
         },
-        args: [content.title, markdownContent],
+        args: [content.title, markdownContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      console.log('[COSE] Twitter Articles 填充结果:', fillResult[0]?.result)
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || 'Twitter Articles 内容填充失败', tabId: tab.id }
+      }
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
+      console.log('[COSE] Twitter Articles 内容填充成功，图片:', result.images || 0)
       return { success: true, message: '已同步到 Twitter Articles', tabId: tab.id }
     }
 
@@ -1335,13 +1341,16 @@ async function syncToPlatform(platformId, content) {
         await waitForTab(tab.id)
         await new Promise(resolve => setTimeout(resolve, 2000))
 
+        // 注入工具函数
+        await injectUtils(chrome, tab.id)
+
         const markdownContent = content.markdown || content.body || ''
         console.log('[COSE] 百度千帆 Markdown 内容长度:', markdownContent?.length || 0)
 
-        // 填充标题和内容
+        // 填充标题和内容（含图片粘贴替换）
         const fillResult = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          func: async (title, markdown) => {
+          func: async (title, markdown, imageCache) => {
             const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
             const waitForElement = (selector, timeout = 5000) => {
@@ -1400,7 +1409,35 @@ async function syncToPlatform(platformId, content) {
                 }
 
                 await sleep(1000)
-                return { success: true, confirmed }
+
+                // 图片处理：按顺序逐个替换（避免 src 匹配失效）
+                let imageCount = 0
+                if (imageCache) {
+                  const cacheEntries = Object.entries(imageCache)
+                  const images = Array.from(contentEditor.querySelectorAll('img'))
+                  for (let i = 0; i < images.length && i < cacheEntries.length; i++) {
+                    const [, cached] = cacheEntries[i]
+                    try {
+                      const file = window.dataUrlToFile(cached.dataUrl, cached.filename)
+                      contentEditor.focus()
+                      const range = document.createRange()
+                      range.selectNode(images[i])
+                      const selection = window.getSelection()
+                      selection.removeAllRanges()
+                      selection.addRange(range)
+                      selection.deleteFromDocument()
+                      await new Promise(r => setTimeout(r, 300))
+                      await window.pasteImageFile(contentEditor, file)
+                      imageCount++
+                      console.log(`[COSE] 百度千帆图片已替换(${i + 1}/${images.length}): ${cached.filename}`)
+                    } catch (err) {
+                      console.warn(`[COSE] 百度千帆图片替换失败:`, err.message)
+                    }
+                    await new Promise(r => setTimeout(r, 500))
+                  }
+                }
+
+                return { success: true, confirmed, images: imageCount }
               }
 
               return { success: false, error: 'Editor not found' }
@@ -1409,11 +1446,12 @@ async function syncToPlatform(platformId, content) {
               return { success: false, error: e.message }
             }
           },
-          args: [content.title, markdownContent],
+          args: [content.title, markdownContent, serializedImageCache || null],
           world: 'MAIN',
         })
 
-        console.log('[COSE] 百度千帆填充结果:', fillResult[0]?.result)
+        const result = fillResult?.[0]?.result
+        console.log('[COSE] 百度千帆填充结果:', result)
 
         // 等待内容稳定
         await new Promise(resolve => setTimeout(resolve, 2000))
@@ -1427,6 +1465,11 @@ async function syncToPlatform(platformId, content) {
           console.log('[COSE] 千帆登录页阻止规则已移除')
         } catch (_) {}
 
+        if (!result?.success) {
+          return { success: false, message: result?.error || '千帆内容填充失败', tabId: tab.id }
+        }
+
+        console.log('[COSE] 百度千帆内容填充成功，图片:', result.images || 0)
         return { success: true, message: '已同步到百度云千帆，请手动点击发布', tabId: tab.id }
       } catch (e) {
         console.error('[COSE] 千帆同步失败:', e)
@@ -1488,6 +1531,9 @@ async function syncToPlatform(platformId, content) {
       tab = await chrome.tabs.create({ url: targetUrl, active: false })
       await addTabToSyncGroup(tab.id, tab.windowId)
       await waitForTab(tab.id)
+
+      // 等待页面加载
+      await new Promise(resolve => setTimeout(resolve, 2000))
     }
 
     // 微信公众号：直接注入 HTML 到编辑器
@@ -1638,6 +1684,16 @@ async function syncToPlatform(platformId, content) {
 
       console.log('[COSE] 微信内容填充成功，字数:', fillResult.wordCount)
 
+      // 替换 data URL 图片为平台上传
+      if (serializedImageCache && Object.keys(serializedImageCache).length > 0) {
+        console.log('[COSE] 开始替换微信编辑器中的 data URL 图片...')
+        const imgResult = await replaceImagesViaPaste(tab.id, chrome, serializedImageCache)
+        console.log(`[COSE] 微信图片替换完成: ${imgResult.replaced}/${imgResult.total} 成功, ${imgResult.failed} 失败`)
+        if (imgResult.errors?.length > 0) {
+          console.warn('[COSE] 图片替换错误:', imgResult.errors)
+        }
+      }
+
       // 等待内容稳定后，点击保存为草稿按钮
       await new Promise(resolve => setTimeout(resolve, 1000))
       await chrome.scripting.executeScript({
@@ -1658,6 +1714,9 @@ async function syncToPlatform(platformId, content) {
 
     // 抖音：使用剪贴板 HTML 粘贴到编辑器（类似微信公众号）
     if (platformId === 'douyin') {
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
+
       // 使用剪贴板 HTML（带完整样式）或降级到 body
       const htmlContent = content.wechatHtml || content.body
       console.log('[COSE] 抖音 HTML 内容长度:', htmlContent?.length || 0)
@@ -1667,7 +1726,7 @@ async function syncToPlatform(platformId, content) {
       try {
         result = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          func: async (title, htmlBody) => {
+          func: async (title, htmlBody, imageCache) => {
             // 等待元素出现的工具函数（检测到立即返回）
             const waitForElement = (selector, timeout = 10000) => {
               return new Promise((resolve) => {
@@ -1723,32 +1782,15 @@ async function syncToPlatform(platformId, content) {
                 editor.innerHTML = ''
 
                 // 使用 ClipboardEvent + DataTransfer 注入 HTML
-                const dt = new DataTransfer()
-                dt.setData('text/html', htmlBody)
-                dt.setData('text/plain', htmlBody.replace(/<[^>]*>/g, ''))
-
-                const pasteEvent = new ClipboardEvent('paste', {
-                  bubbles: true,
-                  cancelable: true,
-                  clipboardData: dt
-                })
-
-                editor.dispatchEvent(pasteEvent)
-                console.log('[COSE] 抖音内容已通过 paste 事件注入')
-
-                // 立即验证内容是否注入成功
-                const wordCount = editor.textContent?.length || 0
-                if (wordCount === 0) {
-                  // 备用方案：直接设置 innerHTML
-                  console.log('[COSE] paste 事件未生效，尝试备用方案')
-                  editor.innerHTML = htmlBody
-                  editor.dispatchEvent(new Event('input', { bubbles: true }))
-                }
+                // 注入 HTML 内容（自动处理图片）
+                const { wordCount, imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
+                console.log(`[COSE] 抖音内容已注入: ${wordCount} 字, ${imageCount} 张图片`)
 
                 return {
                   success: true,
                   wordCount: editor.textContent?.length || 0,
-                  titleFilled: titleInput?.value === title
+                  titleFilled: titleInput?.value === title,
+                  images: imageCount,
                 }
               }
 
@@ -1757,7 +1799,7 @@ async function syncToPlatform(platformId, content) {
               return { success: false, error: err.message }
             }
           },
-          args: [content.title, htmlContent],
+          args: [content.title, htmlContent, serializedImageCache || null],
           world: 'MAIN',
         })
       } catch (e) {
@@ -1776,7 +1818,7 @@ async function syncToPlatform(platformId, content) {
         return { success: false, message: fillResult?.error || '内容填充失败', tabId: tab.id }
       }
 
-      console.log('[COSE] 抖音内容填充成功，字数:', fillResult.wordCount)
+      console.log('[COSE] 抖音内容填充成功，字数:', fillResult.wordCount, '图片:', fillResult.images || 0)
       return { success: true, message: '已同步到抖音', tabId: tab.id }
     }
 
@@ -1785,14 +1827,17 @@ async function syncToPlatform(platformId, content) {
       // 等待页面完全加载
       await new Promise(resolve => setTimeout(resolve, 3000))
 
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
+
       // 使用剪贴板 HTML（带完整样式）或降级到 body
       const htmlContent = content.wechatHtml || content.body
       console.log('[COSE] 搜狐号 HTML 内容长度:', htmlContent?.length || 0)
 
-      // 填充标题和内容
-      await chrome.scripting.executeScript({
+      // 填充标题和内容（含图片粘贴替换）
+      const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (title, htmlBody) => {
+        func: async (title, htmlBody, imageCache) => {
           // 填充标题
           const titleInput = document.querySelector('input[placeholder*="标题"]')
           if (titleInput && title) {
@@ -1812,30 +1857,26 @@ async function syncToPlatform(platformId, content) {
             // 清空现有内容
             editor.innerHTML = ''
 
-            // 使用 DataTransfer 触发 paste 事件
-            const dt = new DataTransfer()
-            dt.setData('text/html', htmlBody)
-            dt.setData('text/plain', htmlBody.replace(/<[^>]*>/g, ''))
+            // 注入 HTML 内容（自动处理图片）
+            const { imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
+            console.log(`[COSE] 搜狐号内容已注入, ${imageCount} 张图片`)
 
-            const pasteEvent = new ClipboardEvent('paste', {
-              bubbles: true,
-              cancelable: true,
-              clipboardData: dt
-            })
-
-            editor.dispatchEvent(pasteEvent)
-            console.log('[COSE] 搜狐号内容已通过 paste 事件注入')
+            return { success: true, images: imageCount }
           } else {
             console.log('[COSE] 搜狐号未找到编辑器')
+            return { success: false, error: 'Editor not found' }
           }
         },
-        args: [content.title, htmlContent],
+        args: [content.title, htmlContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || '搜狐号内容填充失败', tabId: tab.id }
+      }
 
+      console.log('[COSE] 搜狐号内容填充成功，图片:', result.images || 0)
       return { success: true, message: '已同步到搜狐号', tabId: tab.id }
     }
 
@@ -1880,10 +1921,10 @@ async function syncToPlatform(platformId, content) {
 
       console.log('[COSE] B站专栏编辑器状态:', waitForEditor)
 
-      // 填充标题和内容（一次性完成）
+      // 填充标题和内容（含图片粘贴替换）
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (title, htmlBody) => {
+        func: async (title, htmlBody, imageCache) => {
           // 填充标题
           const titleInput = document.querySelector('textarea')
           if (titleInput && title) {
@@ -1911,16 +1952,57 @@ async function syncToPlatform(platformId, content) {
           editor.fireEvent('contentchange')
 
           console.log('[COSE] B站专栏内容已填充')
+
+          // 等待内容渲染
+          await new Promise(r => setTimeout(r, 500))
+
+          // 图片处理：按顺序逐个替换（UEditor iframe 内）
+          let imageCount = 0
+          if (imageCache) {
+            const iframe = document.querySelector('.edui-editor-iframeholder iframe')
+            const iframeDoc = iframe?.contentDocument || iframe?.contentWindow?.document
+            const doc = iframeDoc || document
+            const cacheEntries = Object.entries(imageCache)
+            const images = Array.from(doc.querySelectorAll('img'))
+            for (let i = 0; i < images.length && i < cacheEntries.length; i++) {
+              const [, cached] = cacheEntries[i]
+              try {
+                const file = window.dataUrlToFile(cached.dataUrl, cached.filename)
+                const editorBody = doc.body || doc.documentElement
+                editorBody.focus()
+                const range = doc.createRange()
+                range.selectNode(images[i])
+                const selection = iframe?.contentWindow?.getSelection() || window.getSelection()
+                selection.removeAllRanges()
+                selection.addRange(range)
+                selection.deleteFromDocument()
+                await new Promise(r => setTimeout(r, 300))
+                await window.pasteImageFile(editorBody, file)
+                imageCount++
+                console.log(`[COSE] B站专栏图片已替换(${i + 1}/${images.length}): ${cached.filename}`)
+              } catch (err) {
+                console.warn(`[COSE] B站图片替换失败:`, err.message)
+              }
+              await new Promise(r => setTimeout(r, 500))
+            }
+          }
+
           return {
             success: true,
-            contentLength: editor.getContentLength()
+            contentLength: editor.getContentLength(),
+            images: imageCount,
           }
         },
-        args: [content.title, htmlContent],
+        args: [content.title, htmlContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      console.log('[COSE] B站专栏填充结果:', fillResult)
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || 'B站专栏内容填充失败', tabId: tab.id }
+      }
+
+      console.log('[COSE] B站专栏内容填充成功，图片:', result.images || 0)
 
       // 短暂等待后点击存草稿
       await new Promise(resolve => setTimeout(resolve, 300))
@@ -1939,9 +2021,6 @@ async function syncToPlatform(platformId, content) {
         world: 'MAIN',
       })
 
-      // 等待保存完成
-      await new Promise(resolve => setTimeout(resolve, 500))
-
       return { success: true, message: '已同步并保存草稿到B站专栏', tabId: tab.id }
     }
 
@@ -1950,14 +2029,17 @@ async function syncToPlatform(platformId, content) {
       // 等待页面完全加载
       await new Promise(resolve => setTimeout(resolve, 3000))
 
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
+
       // 使用剪贴板 HTML（带完整样式）或降级到 body
       const htmlContent = content.wechatHtml || content.body
       console.log('[COSE] 微博头条 HTML 内容长度:', htmlContent?.length || 0)
 
-      // 填充标题和内容
+      // 填充标题和内容（含图片粘贴替换）
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (title, htmlBody) => {
+        func: async (title, htmlBody, imageCache) => {
           // 填充标题
           const titleInput = document.querySelector('textarea[placeholder*="标题"]')
           if (titleInput && title) {
@@ -1971,22 +2053,25 @@ async function syncToPlatform(platformId, content) {
           // 填充内容 - 微博使用 ProseMirror/TipTap 编辑器
           const editor = document.querySelector('.ProseMirror')
           if (editor && htmlBody) {
-            editor.innerHTML = htmlBody
-            editor.dispatchEvent(new Event('input', { bubbles: true }))
-            console.log('[COSE] 微博头条内容填充成功')
-            return { success: true }
+            // 注入 HTML 内容（自动处理图片）
+            const { imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
+            console.log(`[COSE] 微博头条内容已注入, ${imageCount} 张图片`)
+
+            return { success: true, images: imageCount }
           }
 
           return { success: false, error: 'Editor not found' }
         },
-        args: [content.title, htmlContent],
+        args: [content.title, htmlContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      console.log('[COSE] 微博头条填充结果:', fillResult)
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || '微博头条内容填充失败', tabId: tab.id }
+      }
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      console.log('[COSE] 微博头条内容填充成功，图片:', result.images || 0)
 
       // 点击保存草稿按钮
       await chrome.scripting.executeScript({
@@ -2002,9 +2087,6 @@ async function syncToPlatform(platformId, content) {
         world: 'MAIN',
       })
 
-      // 等待保存完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
       return { success: true, message: '已同步到微博头条', tabId: tab.id }
     }
 
@@ -2013,14 +2095,17 @@ async function syncToPlatform(platformId, content) {
       // 等待页面完全加载
       await new Promise(resolve => setTimeout(resolve, 3000))
 
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
+
       // 阿里云使用 Markdown 编辑器
       const markdownContent = content.markdown || content.body || ''
       console.log('[COSE] 阿里云开发者社区 Markdown 内容长度:', markdownContent?.length || 0)
 
-      // 填充标题和内容
+      // 填充标题和内容（含图片粘贴替换）
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (title, markdown) => {
+        func: async (title, markdown, imageCache) => {
           // 填充标题
           const titleInput = document.querySelector('input[placeholder*="标题"]')
           if (titleInput && title) {
@@ -2046,20 +2131,53 @@ async function syncToPlatform(platformId, content) {
             contentTextarea.dispatchEvent(new Event('input', { bubbles: true }))
             contentTextarea.dispatchEvent(new Event('change', { bubbles: true }))
             console.log('[COSE] 阿里云开发者社区内容填充成功')
-            return { success: true }
+
+            // 图片处理：textarea 编辑器，图片在预览区域
+            // 按顺序替换预览中的图片
+            let imageCount = 0
+            if (imageCache) {
+              await new Promise(r => setTimeout(r, 1500))
+              const preview = document.querySelector('.markdown-preview, .preview, [class*="preview"]')
+              const container = preview || document.body
+              const cacheEntries = Object.entries(imageCache)
+              const images = Array.from(container.querySelectorAll('img'))
+              for (let i = 0; i < images.length && i < cacheEntries.length; i++) {
+                const [, cached] = cacheEntries[i]
+                try {
+                  const file = window.dataUrlToFile(cached.dataUrl, cached.filename)
+                  images[i].focus()
+                  const range = document.createRange()
+                  range.selectNode(images[i])
+                  const selection = window.getSelection()
+                  selection.removeAllRanges()
+                  selection.addRange(range)
+                  selection.deleteFromDocument()
+                  await new Promise(r => setTimeout(r, 300))
+                  await window.pasteImageFile(container, file)
+                  imageCount++
+                  console.log(`[COSE] 阿里云图片已替换(${i + 1}/${images.length}): ${cached.filename}`)
+                } catch (err) {
+                  console.warn(`[COSE] 阿里云图片替换失败:`, err.message)
+                }
+                await new Promise(r => setTimeout(r, 500))
+              }
+            }
+
+            return { success: true, images: imageCount }
           }
 
           return { success: false, error: 'Editor not found' }
         },
-        args: [content.title, markdownContent],
+        args: [content.title, markdownContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      console.log('[COSE] 阿里云开发者社区填充结果:', fillResult)
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || '阿里云内容填充失败', tabId: tab.id }
+      }
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
+      console.log('[COSE] 阿里云开发者社区内容填充成功，图片:', result.images || 0)
       return { success: true, message: '已同步到阿里云开发者社区', tabId: tab.id }
     }
 
@@ -2068,21 +2186,43 @@ async function syncToPlatform(platformId, content) {
       // 等待页面完全加载
       await new Promise(resolve => setTimeout(resolve, 3000))
 
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
+
       // 火山引擎使用 Markdown 编辑器
       const markdownContent = content.markdown || content.body || ''
       console.log('[COSE] 火山引擎开发者社区 Markdown 内容长度:', markdownContent?.length || 0)
 
-      // 填充标题和内容
+      // 填充标题和内容（含图片粘贴替换）
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (title, markdown) => {
+        func: async (title, markdown, imageCache) => {
+          // 解析 markdown 为 text/image 交替片段
+          function parseMarkdownSegments(md) {
+            if (!md) return []
+            const segments = []
+            const regex = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g
+            let lastIndex = 0
+            let match
+            while ((match = regex.exec(md)) !== null) {
+              if (match.index > lastIndex) {
+                segments.push({ type: 'text', content: md.slice(lastIndex, match.index) })
+              }
+              segments.push({ type: 'image', url: match[1] })
+              lastIndex = regex.lastIndex
+            }
+            if (lastIndex < md.length) {
+              segments.push({ type: 'text', content: md.slice(lastIndex) })
+            }
+            return segments
+          }
+
           // 填充标题
           const titleInput = document.querySelector('input[placeholder*="标题"]') ||
             document.querySelector('input[class*="title"]') ||
             document.querySelector('.article-title input')
           if (titleInput && title) {
             titleInput.focus()
-            // 使用 native setter 来绕过 React 的受控组件
             const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
             nativeSetter.call(titleInput, title)
             titleInput.dispatchEvent(new Event('input', { bubbles: true }))
@@ -2093,9 +2233,37 @@ async function syncToPlatform(platformId, content) {
           // 火山引擎使用 ByteMD 编辑器（基于 CodeMirror）
           const codeMirrorEl = document.querySelector('.CodeMirror')
           if (codeMirrorEl && codeMirrorEl.CodeMirror && markdown) {
-            codeMirrorEl.CodeMirror.setValue(markdown)
-            console.log('[COSE] 火山引擎开发者社区内容填充成功')
-            return { success: true, method: 'CodeMirror' }
+            const cm = codeMirrorEl.CodeMirror
+            const segments = parseMarkdownSegments(markdown)
+            let imageCount = 0
+
+            if (segments.length === 0 || (segments.length === 1 && segments[0].type === 'text')) {
+              cm.setValue(markdown)
+            } else {
+              // 先设置纯文本内容
+              let textContent = ''
+              for (const seg of segments) {
+                if (seg.type === 'text') textContent += seg.content
+              }
+              cm.setValue(textContent)
+
+              // 逐个粘贴图片
+              if (imageCache) {
+                for (const seg of segments) {
+                  if (seg.type === 'image' && imageCache[seg.url]) {
+                    cm.focus()
+                    cm.setCursor(cm.lineCount(), 0)
+                    const cached = imageCache[seg.url]
+                    const file = window.dataUrlToFile(cached.dataUrl, cached.filename)
+                    await window.pasteImageFile(codeMirrorEl, file)
+                    imageCount++
+                  }
+                }
+              }
+            }
+
+            console.log(`[COSE] 火山引擎开发者社区内容填充完成: ${imageCount} 张图片`)
+            return { success: true, method: 'CodeMirror', images: imageCount }
           }
 
           // 备用方案：尝试直接操作 textarea
@@ -2114,15 +2282,16 @@ async function syncToPlatform(platformId, content) {
 
           return { success: false, error: 'Editor not found' }
         },
-        args: [content.title, markdownContent],
+        args: [content.title, markdownContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      console.log('[COSE] 火山引擎开发者社区填充结果:', fillResult)
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || '火山引擎内容填充失败', tabId: tab.id }
+      }
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
+      console.log('[COSE] 火山引擎开发者社区内容填充成功，图片:', result.images || 0)
       return { success: true, message: '已同步到火山引擎开发者社区', tabId: tab.id }
     }
 
@@ -2336,6 +2505,11 @@ async function syncToPlatform(platformId, content) {
 
       // 等待保存完成
       await new Promise(resolve => setTimeout(resolve, 1000))
+
+      // 图片处理：华为云使用 iframe 编辑器，图片在 iframe 内
+      // 由于无法直接操作 iframe 内的图片粘贴，跳过图片替换
+      // 图片 URL 已在 markdown 中，平台会自动处理
+      console.log('[COSE] 华为云开发者博客同步完成（iframe 编辑器，跳过图片粘贴替换）')
 
       return { success: true, message: '已同步到华为云开发者博客', tabId: tab.id }
     }
@@ -2580,6 +2754,10 @@ async function syncToPlatform(platformId, content) {
 
       console.log('[COSE] 华为开发者文章填充结果:', result[0]?.result)
 
+      // 图片处理：华为开发者使用 ACE Editor（代码编辑器），无法粘贴图片
+      // 图片 URL 已在 markdown 中，平台会自动处理
+      console.log('[COSE] 华为开发者文章同步完成（ACE Editor，跳过图片粘贴替换）')
+
       return { success: true, message: '已同步到华为开发者文章', tabId: tab.id }
     }
 
@@ -2592,10 +2770,10 @@ async function syncToPlatform(platformId, content) {
       const htmlContent = content.wechatHtml || content.body
       console.log('[COSE] 百家号 HTML 内容长度:', htmlContent?.length || 0)
 
-      // 填充标题和内容
+      // 填充标题和内容（含图片粘贴替换）
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (title, htmlBody) => {
+        func: async (title, htmlBody, imageCache) => {
           // 填充标题 - 百家号标题在 contenteditable div 中
           const titleEditor = document.querySelector('.client_components_titleInput [contenteditable="true"]') ||
             document.querySelector('.client_pages_edit_components_titleInput [contenteditable="true"]') ||
@@ -2613,74 +2791,73 @@ async function syncToPlatform(platformId, content) {
           }
 
           // 等待一下再填充内容
-          setTimeout(() => {
-            // 尝试通过 UEditor API 填充
-            if (window.UE_V2 && window.UE_V2.instants && window.UE_V2.instants.ueditorInstant0) {
-              try {
-                const editor = window.UE_V2.instants.ueditorInstant0
+          await new Promise(r => setTimeout(r, 500))
 
-                // 提取原始 HTML 中的公式（包含完整 SVG）
-                const tempDiv = document.createElement('div')
-                tempDiv.innerHTML = htmlBody
-                const originalFormulas = []
-                tempDiv.querySelectorAll('.katex-inline, .katex-block, section.katex-block').forEach((formula, index) => {
-                  const svg = formula.querySelector('svg')
-                  if (svg && svg.innerHTML) {
-                    originalFormulas.push({
-                      index,
-                      className: formula.className,
-                      fullHtml: formula.outerHTML
-                    })
-                  }
-                })
-                console.log('[COSE] 百家号提取到', originalFormulas.length, '个公式')
+          // 尝试通过 UEditor API 填充
+          if (window.UE_V2 && window.UE_V2.instants && window.UE_V2.instants.ueditorInstant0) {
+            try {
+              const editor = window.UE_V2.instants.ueditorInstant0
 
-                // 先用 setContent 设置内容（公式 SVG 会被过滤）
-                editor.setContent(htmlBody)
-
-                // 然后直接向 iframe 注入完整的公式 SVG
-                if (originalFormulas.length > 0) {
-                  setTimeout(() => {
-                    const iframe = document.querySelector('iframe')
-                    if (iframe && iframe.contentDocument) {
-                      const iframeDoc = iframe.contentDocument
-                      const emptyFormulas = iframeDoc.querySelectorAll('.katex-inline, .katex-block, section.katex-block')
-
-                      emptyFormulas.forEach((emptyFormula, index) => {
-                        const original = originalFormulas[index]
-                        if (original) {
-                          // 创建新元素并替换
-                          const newElement = document.createElement('div')
-                          newElement.innerHTML = original.fullHtml
-                          const newFormula = newElement.firstElementChild
-                          if (newFormula && emptyFormula.parentNode) {
-                            emptyFormula.parentNode.replaceChild(newFormula, emptyFormula)
-                          }
-                        }
-                      })
-
-                      console.log('[COSE] 百家号公式 SVG 已恢复')
-                      editor.fireEvent('contentChange')
-                    }
-                  }, 300)
+              // 提取原始 HTML 中的公式（包含完整 SVG）
+              const tempDiv = document.createElement('div')
+              tempDiv.innerHTML = htmlBody
+              const originalFormulas = []
+              tempDiv.querySelectorAll('.katex-inline, .katex-block, section.katex-block').forEach((formula, index) => {
+                const svg = formula.querySelector('svg')
+                if (svg && svg.innerHTML) {
+                  originalFormulas.push({
+                    index,
+                    className: formula.className,
+                    fullHtml: formula.outerHTML
+                  })
                 }
+              })
+              console.log('[COSE] 百家号提取到', originalFormulas.length, '个公式')
 
-                editor.fireEvent('contentChange');
-                editor.fireEvent('selectionchange');
-                console.log('[COSE] 百家号通过 UEditor API 填充成功')
-                return
-              } catch (e) {
-                console.log('[COSE] 百家号 UEditor API 调用失败', e)
+              // 先用 setContent 设置内容（公式 SVG 会被过滤）
+              editor.setContent(htmlBody)
+
+              // 然后直接向 iframe 注入完整的公式 SVG
+              if (originalFormulas.length > 0) {
+                await new Promise(r => setTimeout(r, 300))
+                const iframe = document.querySelector('iframe')
+                if (iframe && iframe.contentDocument) {
+                  const iframeDoc = iframe.contentDocument
+                  const emptyFormulas = iframeDoc.querySelectorAll('.katex-inline, .katex-block, section.katex-block')
+
+                  emptyFormulas.forEach((emptyFormula, index) => {
+                    const original = originalFormulas[index]
+                    if (original) {
+                      const newElement = document.createElement('div')
+                      newElement.innerHTML = original.fullHtml
+                      const newFormula = newElement.firstElementChild
+                      if (newFormula && emptyFormula.parentNode) {
+                        emptyFormula.parentNode.replaceChild(newFormula, emptyFormula)
+                      }
+                    }
+                  })
+
+                  console.log('[COSE] 百家号公式 SVG 已恢复')
+                  editor.fireEvent('contentChange')
+                }
               }
+
+              editor.fireEvent('contentChange');
+              editor.fireEvent('selectionchange');
+              console.log('[COSE] 百家号通过 UEditor API 填充成功')
+
+              // 图片处理：百家号使用 UEditor iframe，图片在 iframe 内
+              // 由于无法直接操作 iframe 内的图片粘贴，跳过图片替换
+              console.log('[COSE] 百家号同步完成（UEditor iframe，跳过图片粘贴替换）')
+              return
+            } catch (e) {
+              console.log('[COSE] 百家号 UEditor API 调用失败', e)
             }
-          }, 500)
+          }
         },
-        args: [content.title, htmlContent],
+        args: [content.title, htmlContent, serializedImageCache || null],
         world: 'MAIN',
       })
-
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 2000))
 
       return { success: true, message: '已同步到百家号', tabId: tab.id }
     }
@@ -2690,25 +2867,26 @@ async function syncToPlatform(platformId, content) {
       // 等待页面完全加载
       await new Promise(resolve => setTimeout(resolve, 3000))
 
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
+
       // 使用剪贴板 HTML（带完整样式）或降级到 body
       const htmlContent = content.wechatHtml || content.body
       console.log('[COSE] 少数派 HTML 内容长度:', htmlContent?.length || 0)
 
-      // 填充标题和内容
-      await chrome.scripting.executeScript({
+      // 填充标题和内容（含图片粘贴替换）
+      const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (title, htmlBody) => {
+        func: async (title, htmlBody, imageCache) => {
           // 填充标题 - 少数派使用 textarea
           const titleInput = document.querySelector('textarea[placeholder*="标题"]') ||
             document.querySelector('input[placeholder*="标题"]')
 
           if (titleInput && title) {
             titleInput.focus()
-            // 使用 native setter 来绕过 Vue/React 的受控组件
             const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set ||
               Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
             nativeSetter.call(titleInput, title)
-            // 触发事件
             titleInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: title, inputType: 'insertText' }))
             titleInput.dispatchEvent(new Event('change', { bubbles: true }))
             titleInput.dispatchEvent(new Event('blur', { bubbles: true }))
@@ -2716,37 +2894,34 @@ async function syncToPlatform(platformId, content) {
           }
 
           // 等待一下再填充内容
-          setTimeout(() => {
-            // 找到 ProseMirror 编辑器
-            const editor = document.querySelector('.ProseMirror') ||
-              document.querySelector('[contenteditable="true"]')
+          await new Promise(r => setTimeout(r, 500))
 
-            if (editor && htmlBody) {
-              editor.focus()
+          // 找到 ProseMirror 编辑器
+          const editor = document.querySelector('.ProseMirror') ||
+            document.querySelector('[contenteditable="true"]')
 
-              // 方法：创建 DataTransfer 并触发 paste 事件
-              const dt = new DataTransfer()
-              dt.setData('text/html', htmlBody)
-              dt.setData('text/plain', htmlBody.replace(/<[^>]*>/g, ''))
+          if (editor && htmlBody) {
+            editor.focus()
 
-              const pasteEvent = new ClipboardEvent('paste', {
-                bubbles: true,
-                cancelable: true,
-                clipboardData: dt
-              })
+            // 注入 HTML 内容（自动处理图片）
+            const { imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
+            console.log(`[COSE] 少数派内容已注入, ${imageCount} 张图片`)
 
-              editor.dispatchEvent(pasteEvent)
-              console.log('[COSE] 少数派内容已通过 paste 事件注入')
-            }
-          }, 500)
+            return { success: true, images: imageCount }
+          }
+
+          return { success: false, error: 'Editor not found' }
         },
-        args: [content.title, htmlContent],
+        args: [content.title, htmlContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || '少数派内容填充失败', tabId: tab.id }
+      }
 
+      console.log('[COSE] 少数派内容填充成功，图片:', result.images || 0)
       return { success: true, message: '已同步到少数派', tabId: tab.id }
     }
 
@@ -2755,14 +2930,17 @@ async function syncToPlatform(platformId, content) {
       // 等待页面完全加载
       await new Promise(resolve => setTimeout(resolve, 3000))
 
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
+
       // 使用剪贴板 HTML（带完整样式）或降级到 body
       const htmlContent = content.wechatHtml || content.body
       console.log('[COSE] 支付宝开放平台 HTML 内容长度:', htmlContent?.length || 0)
 
-      // 填充标题和内容
+      // 填充标题和内容（含图片粘贴替换）
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: async (title, htmlBody) => {
+        func: async (title, htmlBody, imageCache) => {
           // 等待元素出现的工具函数
           const waitForElement = (selector, timeout = 10000) => {
             return new Promise((resolve) => {
@@ -2794,10 +2972,7 @@ async function syncToPlatform(platformId, content) {
               titleInput.focus()
 
               // Ant Design 输入框需要特殊处理
-              // 先清空
               titleInput.value = ''
-
-              // 使用 native setter 确保 React 能检测到变化
               const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
               if (nativeSetter) {
                 nativeSetter.call(titleInput, title)
@@ -2805,22 +2980,18 @@ async function syncToPlatform(platformId, content) {
                 titleInput.value = title
               }
 
-              // 触发多个事件确保 Ant Design 组件能识别
               titleInput.dispatchEvent(new Event('input', { bubbles: true }))
               titleInput.dispatchEvent(new Event('change', { bubbles: true }))
               titleInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }))
               titleInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }))
 
-              // 使用 setValue 方法（如果存在）
               if (titleInput._valueTracker) {
                 titleInput._valueTracker.setValue('')
               }
 
-              // 再次设置值
               titleInput.value = title
               titleInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }))
 
-              // 模拟用户输入
               const inputEvent = new InputEvent('input', {
                 bubbles: true,
                 cancelable: true,
@@ -2843,33 +3014,11 @@ async function syncToPlatform(platformId, content) {
               // 清空现有内容
               editor.innerHTML = ''
 
-              // 使用 ClipboardEvent + DataTransfer 注入 HTML
-              const dt = new DataTransfer()
-              dt.setData('text/html', htmlBody)
-              dt.setData('text/plain', htmlBody.replace(/<[^>]*>/g, ''))
+              // 注入 HTML 内容（自动处理图片）
+              const { wordCount, imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
+              console.log(`[COSE] 支付宝开放平台内容已注入: ${wordCount} 字, ${imageCount} 张图片`)
 
-              const pasteEvent = new ClipboardEvent('paste', {
-                bubbles: true,
-                cancelable: true,
-                clipboardData: dt
-              })
-
-              editor.dispatchEvent(pasteEvent)
-              console.log('[COSE] 支付宝开放平台内容已通过 paste 事件注入')
-
-              // 等待内容渲染
-              await new Promise(r => setTimeout(r, 500))
-
-              // 验证内容是否注入成功
-              const wordCount = editor.textContent?.length || 0
-              if (wordCount === 0) {
-                // 备用方案：直接设置 innerHTML
-                console.log('[COSE] paste 事件未生效，尝试备用方案')
-                editor.innerHTML = htmlBody
-                editor.dispatchEvent(new Event('input', { bubbles: true }))
-              }
-
-              return { success: true, method: 'paste-html', length: htmlBody.length }
+              return { success: true, method: 'paste-html', length: htmlBody.length, images: imageCount }
             }
 
             return { success: false, error: 'ne-engine editor not found' }
@@ -2878,15 +3027,16 @@ async function syncToPlatform(platformId, content) {
             return { success: false, error: e.message }
           }
         },
-        args: [content.title, htmlContent],
+        args: [content.title, htmlContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      console.log('[COSE] 支付宝开放平台填充结果:', fillResult[0]?.result)
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || '支付宝开放平台内容填充失败', tabId: tab.id }
+      }
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
+      console.log('[COSE] 支付宝开放平台内容填充成功，图片:', result.images || 0)
       return { success: true, message: '已同步到支付宝开放平台', tabId: tab.id }
     }
 
@@ -2895,14 +3045,37 @@ async function syncToPlatform(platformId, content) {
       // 等待页面完全加载
       await new Promise(resolve => setTimeout(resolve, 3000))
 
+      // 注入工具函数
+      await injectUtils(chrome, tab.id)
+
       // 使用 Markdown 内容
       const markdownContent = content.markdown || content.body || ''
       console.log('[COSE] 电子发烧友 Markdown 内容长度:', markdownContent?.length || 0)
 
-      // 填充标题和内容
+      // 填充标题和内容（含图片粘贴替换）
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: async (title, markdown) => {
+        func: async (title, markdown, imageCache) => {
+          // 解析 markdown 为 text/image 交替片段
+          function parseMarkdownSegments(md) {
+            if (!md) return []
+            const segments = []
+            const regex = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g
+            let lastIndex = 0
+            let match
+            while ((match = regex.exec(md)) !== null) {
+              if (match.index > lastIndex) {
+                segments.push({ type: 'text', content: md.slice(lastIndex, match.index) })
+              }
+              segments.push({ type: 'image', url: match[1] })
+              lastIndex = regex.lastIndex
+            }
+            if (lastIndex < md.length) {
+              segments.push({ type: 'text', content: md.slice(lastIndex) })
+            }
+            return segments
+          }
+
           // 等待元素出现的工具函数
           const waitForElement = (selector, timeout = 10000) => {
             return new Promise((resolve) => {
@@ -2932,7 +3105,6 @@ async function syncToPlatform(platformId, content) {
             const titleInput = await waitForElement('input[placeholder*="标题"], input.title-input, input[name="title"]', 5000)
             if (titleInput && title) {
               titleInput.focus()
-              // 使用 native setter 确保框架能检测到变化
               const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
               if (nativeSetter) {
                 nativeSetter.call(titleInput, title)
@@ -2973,7 +3145,35 @@ async function syncToPlatform(platformId, content) {
               const wordCount = vditorWysiwyg.textContent?.length || 0
               if (wordCount > 10) {
                 console.log('[COSE] 电子发烧友 Vditor 内容已填充，字数:', wordCount)
-                return { success: true, method: 'vditor-paste', length: wordCount }
+
+                // 图片处理：按顺序逐个替换
+                let imageCount = 0
+                if (imageCache) {
+                  const cacheEntries = Object.entries(imageCache)
+                  const images = Array.from(vditorWysiwyg.querySelectorAll('img'))
+                  for (let i = 0; i < images.length && i < cacheEntries.length; i++) {
+                    const [, cached] = cacheEntries[i]
+                    try {
+                      const file = window.dataUrlToFile(cached.dataUrl, cached.filename)
+                      vditorWysiwyg.focus()
+                      const range = document.createRange()
+                      range.selectNode(images[i])
+                      const selection = window.getSelection()
+                      selection.removeAllRanges()
+                      selection.addRange(range)
+                      selection.deleteFromDocument()
+                      await new Promise(r => setTimeout(r, 300))
+                      await window.pasteImageFile(vditorWysiwyg, file)
+                      imageCount++
+                      console.log(`[COSE] 电子发烧友图片已替换(${i + 1}/${images.length}): ${cached.filename}`)
+                    } catch (err) {
+                      console.warn(`[COSE] 电子发烧友图片替换失败:`, err.message)
+                    }
+                    await new Promise(r => setTimeout(r, 500))
+                  }
+                }
+
+                return { success: true, method: 'vditor-paste', length: wordCount, images: imageCount }
               }
 
               // 备用方案：直接设置 textContent（Vditor 会自动解析 Markdown）
@@ -2987,9 +3187,35 @@ async function syncToPlatform(platformId, content) {
             // 等待并查找 CodeMirror 编辑器或 textarea
             const cmElement = document.querySelector('.CodeMirror')
             if (cmElement && cmElement.CodeMirror) {
-              cmElement.CodeMirror.setValue(markdown)
-              console.log('[COSE] 电子发烧友 CodeMirror 内容已填充')
-              return { success: true, method: 'codemirror', length: markdown.length }
+              const cm = cmElement.CodeMirror
+              const segments = parseMarkdownSegments(markdown)
+              let imageCount = 0
+
+              if (segments.length === 0 || (segments.length === 1 && segments[0].type === 'text')) {
+                cm.setValue(markdown)
+              } else {
+                let textContent = ''
+                for (const seg of segments) {
+                  if (seg.type === 'text') textContent += seg.content
+                }
+                cm.setValue(textContent)
+
+                if (imageCache) {
+                  for (const seg of segments) {
+                    if (seg.type === 'image' && imageCache[seg.url]) {
+                      cm.focus()
+                      cm.setCursor(cm.lineCount(), 0)
+                      const cached = imageCache[seg.url]
+                      const file = window.dataUrlToFile(cached.dataUrl, cached.filename)
+                      await window.pasteImageFile(cmElement, file)
+                      imageCount++
+                    }
+                  }
+                }
+              }
+
+              console.log(`[COSE] 电子发烧友 CodeMirror 内容已填充: ${imageCount} 张图片`)
+              return { success: true, method: 'codemirror', length: markdown.length, images: imageCount }
             }
 
             // 尝试查找 textarea
@@ -3024,15 +3250,16 @@ async function syncToPlatform(platformId, content) {
             return { success: false, error: e.message }
           }
         },
-        args: [content.title, markdownContent],
+        args: [content.title, markdownContent, serializedImageCache || null],
         world: 'MAIN',
       })
 
-      console.log('[COSE] 电子发烧友填充结果:', fillResult[0]?.result)
+      const result = fillResult?.[0]?.result
+      if (!result?.success) {
+        return { success: false, message: result?.error || '电子发烧友内容填充失败', tabId: tab.id }
+      }
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
+      console.log('[COSE] 电子发烧友内容填充成功，图片:', result.images || 0)
       return { success: true, message: '已同步到电子发烧友', tabId: tab.id }
     }
 
@@ -3192,8 +3419,8 @@ async function syncToPlatform(platformId, content) {
         }
       }
 
-      // 等待内容注入完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      // 豆瓣使用纯文本编辑器，不支持图片粘贴替换
+      console.log('[COSE] 豆瓣同步完成（纯文本编辑器，跳过图片粘贴替换）')
 
       return { success: true, message: '已同步到豆瓣，请手动点击发布', tabId: tab.id }
     }

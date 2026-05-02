@@ -218,7 +218,7 @@
 
     // 添加发布任务（兼容 wechatsync 的 addTask 接口）
     addTask(taskData, onProgress, onComplete) {
-      const { post, accounts } = taskData
+      let { post, accounts } = taskData
       const selectedAccounts = accounts.filter(a => a.checked)
       const seenPlatformIds = new Set()
       const syncAccounts = []
@@ -294,6 +294,82 @@
             }
           }
         }
+
+        // 解析内容中的 indexeddb:// 图片引用为 data URL（失败则跳过，不影响同步）
+        let resolvedIndexedDb = { markdown: post.markdown, content: post.content, clipboardHtmlContent }
+        try { resolvedIndexedDb = await (async () => {
+          const INDEXEDDB_RE = /indexeddb:\/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g
+          const allText = [post.markdown, post.content, clipboardHtmlContent].filter(Boolean).join('\n')
+          const uuids = new Set()
+          let m
+          while ((m = INDEXEDDB_RE.exec(allText)) !== null) uuids.add(m[1])
+          if (uuids.size === 0) return { markdown: post.markdown, content: post.content, clipboardHtmlContent }
+
+          console.log(`[COSE] 发现 ${uuids.size} 张 IndexedDB 图片，正在解析...`)
+
+          // Read all blobs in one DB open
+          const blobs = new Map()
+          try {
+            const db = await new Promise((resolve, reject) => {
+              const req = indexedDB.open('md-images', 1)
+              req.onerror = () => reject(req.error)
+              req.onsuccess = () => resolve(req.result)
+            })
+            if (db.objectStoreNames.contains('images')) {
+              const tx = db.transaction('images', 'readonly')
+              const store = tx.objectStore('images')
+              for (const uuid of uuids) {
+                try {
+                  const blob = await new Promise((resolve) => {
+                    const req = store.get(uuid)
+                    req.onsuccess = () => resolve(req.result?.blob ?? null)
+                    req.onerror = () => resolve(null)
+                  })
+                  if (blob) blobs.set(uuid, blob)
+                } catch { /* skip */ }
+              }
+            }
+            db.close()
+          } catch (e) {
+            console.warn('[COSE] IndexedDB 读取失败:', e.message)
+          }
+
+          if (blobs.size === 0) return { markdown: post.markdown, content: post.content, clipboardHtmlContent }
+
+          // Convert blobs to data URLs
+          const resolved = new Map()
+          for (const [uuid, blob] of blobs) {
+            try {
+              const dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader()
+                reader.onload = () => resolve(reader.result)
+                reader.onerror = reject
+                reader.readAsDataURL(blob)
+              })
+              resolved.set(`indexeddb://${uuid}`, dataUrl)
+            } catch { /* skip */ }
+          }
+
+          if (resolved.size === 0) return { markdown: post.markdown, content: post.content, clipboardHtmlContent }
+
+          // Replace in all fields
+          let markdown = post.markdown || ''
+          let content = post.content || ''
+          let html = clipboardHtmlContent || ''
+          for (const [old, dataUrl] of resolved) {
+            markdown = markdown.split(old).join(dataUrl)
+            content = content.split(old).join(dataUrl)
+            html = html.split(old).join(dataUrl)
+          }
+
+          console.log(`[COSE] IndexedDB 图片解析完成: ${resolved.size} 张`)
+          return { markdown, content, clipboardHtmlContent: html || null }
+        })()
+        } catch (e) { console.warn('[COSE] IndexedDB 解析失败，跳过:', e.message) }
+
+        // Use resolved content for all subsequent sync operations
+        post = { ...post, markdown: resolvedIndexedDb.markdown, content: resolvedIndexedDb.content }
+        clipboardHtmlContent = resolvedIndexedDb.clipboardHtmlContent
 
         for (let i = 0; i < syncAccounts.length; i++) {
           const account = syncAccounts[i]
