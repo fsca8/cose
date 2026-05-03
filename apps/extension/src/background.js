@@ -663,10 +663,17 @@ async function syncToPlatform(platformId, content) {
   }
 
   try {
-    // 预下载所有外部图片（只下载一次，序列化后传给各平台复用）
+    // 先使用从 IndexedDB 预缓存的图片（无需下载）
     let serializedImageCache = {}
+    const preCached = content.preCachedImages
+    if (preCached && Object.keys(preCached).length > 0) {
+      Object.assign(serializedImageCache, preCached)
+      console.log(`[COSE] 使用 IndexedDB 预缓存: ${Object.keys(preCached).length} 张图片`)
+    }
+
+    // 预下载所有外部图片，跳过已有缓存的
     try {
-      const imageCache = await downloadAllImages(content)
+      const imageCache = await downloadAllImages(content, 3, new Set(Object.keys(serializedImageCache)))
       if (imageCache.size > 0) {
         Object.assign(serializedImageCache, await serializeImageCache(imageCache))
       }
