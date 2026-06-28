@@ -119,7 +119,7 @@ function sendOffscreenMessage(msg, timeoutMs = 15000) {
  * Execute a fetch in the context of a target site's tab.
  * This is needed for sites whose auth cookies are SameSite=Lax (default),
  * which won't be sent from cross-site contexts like offscreen documents.
- * 
+ *
  * Strategy: find an existing tab for the domain, or create a temporary one,
  * then inject a script that makes the fetch with credentials: 'include'.
  */
@@ -134,7 +134,9 @@ async function tabContextFetch(siteUrl, apiUrl, options = {}) {
     // Find existing tab
     let tabs = await chrome.tabs.query({ url: pattern })
     let tab = tabs.find(t => t.id && !t.discarded)
-    console.log(`[COSE] tabContextFetch: found ${tabs.length} tabs, usable: ${tab ? tab.id : 'none'}`)
+    console.log(
+      `[COSE] tabContextFetch: found ${tabs.length} tabs, usable: ${tab ? tab.id : 'none'}`
+    )
 
     if (!tab) {
       // Create a background tab (not active, for other platforms that need it)
@@ -171,13 +173,17 @@ async function tabContextFetch(siteUrl, apiUrl, options = {}) {
           const resp = await fetch(fetchUrl, {
             method: 'GET',
             credentials: 'include',
-            headers: { 'Accept': respType === 'json' ? 'application/json' : 'text/html' },
+            headers: { Accept: respType === 'json' ? 'application/json' : 'text/html' },
           })
           const status = resp.status
           const finalUrl = resp.url
           let body = null
           if (respType === 'json') {
-            try { body = await resp.json() } catch (e) { body = null }
+            try {
+              body = await resp.json()
+            } catch (e) {
+              body = null
+            }
           } else {
             body = await resp.text()
           }
@@ -192,15 +198,26 @@ async function tabContextFetch(siteUrl, apiUrl, options = {}) {
 
     // Clean up created tab
     if (createdTabId) {
-      try { await chrome.tabs.remove(createdTabId) } catch (e) { /* ignore */ }
+      try {
+        await chrome.tabs.remove(createdTabId)
+      } catch (e) {
+        /* ignore */
+      }
     }
 
-    console.log(`[COSE] tabContextFetch result:`, JSON.stringify(results?.[0]?.result).substring(0, 200))
+    console.log(
+      `[COSE] tabContextFetch result:`,
+      JSON.stringify(results?.[0]?.result).substring(0, 200)
+    )
     return results?.[0]?.result || null
   } catch (e) {
     // Clean up on error
     if (createdTabId) {
-      try { await chrome.tabs.remove(createdTabId) } catch (e2) { /* ignore */ }
+      try {
+        await chrome.tabs.remove(createdTabId)
+      } catch (e2) {
+        /* ignore */
+      }
     }
     console.log(`[COSE] tabContextFetch failed for ${apiUrl}:`, e.message)
     return null
@@ -293,7 +310,7 @@ async function initDynamicRules() {
     const existingIds = existingRules.map(r => r.id)
     if (existingIds.length > 0) {
       await chrome.declarativeNetRequest.updateDynamicRules({
-        removeRuleIds: existingIds
+        removeRuleIds: existingIds,
       })
     }
 
@@ -307,16 +324,16 @@ async function initDynamicRules() {
             type: 'modifyHeaders',
             requestHeaders: [
               { header: 'Referer', operation: 'set', value: 'https://weibo.com/' },
-              { header: 'Origin', operation: 'set', value: 'https://weibo.com' }
+              { header: 'Origin', operation: 'set', value: 'https://weibo.com' },
             ],
             responseHeaders: [
-              { header: 'Access-Control-Allow-Origin', operation: 'set', value: '*' }
-            ]
+              { header: 'Access-Control-Allow-Origin', operation: 'set', value: '*' },
+            ],
           },
           condition: {
             urlFilter: '*sinaimg.cn*',
-            resourceTypes: ['image', 'xmlhttprequest']
-          }
+            resourceTypes: ['image', 'xmlhttprequest'],
+          },
         },
         {
           id: 2,
@@ -325,18 +342,18 @@ async function initDynamicRules() {
             type: 'modifyHeaders',
             requestHeaders: [
               { header: 'Referer', operation: 'set', value: 'https://sspai.com/' },
-              { header: 'Origin', operation: 'set', value: 'https://sspai.com' }
+              { header: 'Origin', operation: 'set', value: 'https://sspai.com' },
             ],
             responseHeaders: [
-              { header: 'Access-Control-Allow-Origin', operation: 'set', value: '*' }
-            ]
+              { header: 'Access-Control-Allow-Origin', operation: 'set', value: '*' },
+            ],
           },
           condition: {
             urlFilter: '*cdnfile.sspai.com*',
-            resourceTypes: ['image', 'xmlhttprequest']
-          }
-        }
-      ]
+            resourceTypes: ['image', 'xmlhttprequest'],
+          },
+        },
+      ],
     })
     console.log('[COSE] 动态规则初始化完成')
   } catch (e) {
@@ -426,13 +443,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === 'GET_DEBUG_LOGS') {
-    chrome.storage.local.get('debug_logs', (result) => {
+    chrome.storage.local.get('debug_logs', result => {
       sendResponse({ logs: result.debug_logs || [] })
     })
     return true
   }
 
-  (async () => {
+  ;(async () => {
     try {
       const result = await handleMessage(request, sender)
       sendResponse(result)
@@ -472,14 +489,20 @@ async function handleMessage(request, sender) {
       } else if (request.platform === 'huaweicloud' && request.userInfo) {
         const hwcInfo = { ...request.userInfo }
         if (hwcInfo.avatar && hwcInfo.avatar.startsWith('http')) {
-          hwcInfo.avatar = await convertAvatarToBase64(hwcInfo.avatar, 'https://bbs.huaweicloud.com/')
+          hwcInfo.avatar = await convertAvatarToBase64(
+            hwcInfo.avatar,
+            'https://bbs.huaweicloud.com/'
+          )
         }
         await chrome.storage.local.set({ huaweicloud_user: hwcInfo })
         console.log('[COSE] 华为云用户信息已缓存:', hwcInfo.username)
       } else if (request.platform === 'huaweidev' && request.userInfo) {
         const hwdInfo = { ...request.userInfo }
         if (hwdInfo.avatar && hwdInfo.avatar.startsWith('http')) {
-          hwdInfo.avatar = await convertAvatarToBase64(hwdInfo.avatar, 'https://developer.huawei.com/')
+          hwdInfo.avatar = await convertAvatarToBase64(
+            hwdInfo.avatar,
+            'https://developer.huawei.com/'
+          )
         }
         await chrome.storage.local.set({ huaweidev_user: hwdInfo })
         console.log('[COSE] 华为开发者用户信息已缓存:', hwdInfo.username)
@@ -497,7 +520,7 @@ async function checkAllPlatforms(platforms) {
     // 过滤掉无效的平台配置
     const validPlatforms = (platforms || []).filter(p => p && p.id)
     const results = await Promise.allSettled(
-      validPlatforms.map(async (platform) => {
+      validPlatforms.map(async platform => {
         try {
           const result = await checkPlatformLogin(platform)
           return { id: platform.id, result }
@@ -506,7 +529,7 @@ async function checkAllPlatforms(platforms) {
         }
       })
     )
-    results.forEach((res) => {
+    results.forEach(res => {
       if (res.status === 'fulfilled' && res.value?.id) {
         status[res.value.id] = res.value.result
       }
@@ -524,7 +547,7 @@ async function checkAllPlatformsProgressive(platforms, tabId) {
   const total = validPlatforms.length
 
   // 并行检查所有平台，每个完成后立即发送结果
-  const promises = validPlatforms.map(async (platform) => {
+  const promises = validPlatforms.map(async platform => {
     try {
       const result = await checkPlatformLogin(platform)
       completed++
@@ -538,7 +561,7 @@ async function checkAllPlatformsProgressive(platforms, tabId) {
             platform: platform,
             result: result,
             completed: completed,
-            total: total
+            total: total,
           })
         } catch (e) {
           console.log('[COSE] 发送平台状态更新失败:', platform.id, e.message)
@@ -558,7 +581,7 @@ async function checkAllPlatformsProgressive(platforms, tabId) {
             platform: platform,
             result: errorResult,
             completed: completed,
-            total: total
+            total: total,
           })
         } catch (e2) {
           console.log('[COSE] 发送平台状态更新失败:', platform.id, e2.message)
@@ -576,7 +599,7 @@ async function checkAllPlatformsProgressive(platforms, tabId) {
     try {
       await chrome.tabs.sendMessage(tabId, {
         type: 'PLATFORM_STATUS_COMPLETE',
-        total: total
+        total: total,
       })
     } catch (e) {
       console.log('[COSE] 发送完成消息失败:', e.message)
@@ -607,7 +630,7 @@ async function pasteWithDebugger(tabId) {
       modifiers: 2, // Ctrl
       windowsVirtualKeyCode: 17,
       code: 'ControlLeft',
-      key: 'Control'
+      key: 'Control',
     })
 
     // 发送 V 按下（带 Ctrl 修饰符）
@@ -616,7 +639,7 @@ async function pasteWithDebugger(tabId) {
       modifiers: 2, // Ctrl
       windowsVirtualKeyCode: 86,
       code: 'KeyV',
-      key: 'v'
+      key: 'v',
     })
 
     // 发送 V 释放
@@ -625,7 +648,7 @@ async function pasteWithDebugger(tabId) {
       modifiers: 2,
       windowsVirtualKeyCode: 86,
       code: 'KeyV',
-      key: 'v'
+      key: 'v',
     })
 
     // 发送 Ctrl 释放
@@ -634,14 +657,13 @@ async function pasteWithDebugger(tabId) {
       modifiers: 0,
       windowsVirtualKeyCode: 17,
       code: 'ControlLeft',
-      key: 'Control'
+      key: 'Control',
     })
 
     console.log('[COSE] Paste command sent via debugger')
 
     // 等待粘贴完成
     await new Promise(resolve => setTimeout(resolve, 1000))
-
   } catch (error) {
     console.error('[COSE] Debugger paste failed:', error)
   } finally {
@@ -730,8 +752,8 @@ async function syncToPlatform(platformId, content) {
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          }
+            Accept: 'application/json',
+          },
         })
         const data = await response.json()
 
@@ -759,8 +781,8 @@ async function syncToPlatform(platformId, content) {
           method: 'GET',
           credentials: 'include',
           headers: {
-            'Accept': 'application/json',
-          }
+            Accept: 'application/json',
+          },
         })
         const notebooks = await notebooksResp.json()
 
@@ -778,13 +800,13 @@ async function syncToPlatform(platformId, content) {
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            'Accept': 'application/json',
+            Accept: 'application/json',
           },
           body: JSON.stringify({
             notebook_id: String(notebookId),
             title: content.title || '无标题',
-            at_bottom: false
-          })
+            at_bottom: false,
+          }),
         })
         const noteData = await createResp.json()
 
@@ -823,11 +845,12 @@ async function syncToPlatform(platformId, content) {
       const clickResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: async () => {
-          const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
           // 查找"新的创作"按钮
-          const createBtn = Array.from(document.querySelectorAll('button'))
-            .find(el => el.textContent.includes('新的创作'))
+          const createBtn = Array.from(document.querySelectorAll('button')).find(el =>
+            el.textContent.includes('新的创作')
+          )
 
           if (createBtn) {
             createBtn.click()
@@ -838,7 +861,8 @@ async function syncToPlatform(platformId, content) {
               const start = Date.now()
               while (Date.now() - start < timeout) {
                 // 查找编辑器元素，可能是 contenteditable 或 textarea
-                const editor = document.querySelector('[contenteditable="true"]') ||
+                const editor =
+                  document.querySelector('[contenteditable="true"]') ||
                   document.querySelector('textarea') ||
                   document.querySelector('.editor') ||
                   document.querySelector('.content-editor')
@@ -849,15 +873,21 @@ async function syncToPlatform(platformId, content) {
             }
 
             const editorLoaded = await waitForEditor()
-            return { success: editorLoaded, message: editorLoaded ? 'Editor loaded' : 'Editor timeout' }
+            return {
+              success: editorLoaded,
+              message: editorLoaded ? 'Editor loaded' : 'Editor timeout',
+            }
           }
 
           return { success: false, message: 'Create button not found' }
-        }
+        },
       })
 
       if (!clickResult[0]?.result?.success) {
-        return { success: false, message: '小红书创建文章失败: ' + (clickResult[0]?.result?.message || '未知错误') }
+        return {
+          success: false,
+          message: '小红书创建文章失败: ' + (clickResult[0]?.result?.message || '未知错误'),
+        }
       }
 
       // 等待页面稳定
@@ -870,10 +900,12 @@ async function syncToPlatform(platformId, content) {
       // 填充标题和内容（含图片粘贴替换）
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: async (title, htmlBody, imageCache) => {
+        func: async (title, htmlBody) => {
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
           // 等待元素出现的工具函数
           const waitForElement = (selector, timeout = 15000) => {
-            return new Promise((resolve) => {
+            return new Promise(resolve => {
               const el = document.querySelector(selector)
               if (el) return resolve(el)
 
@@ -897,10 +929,17 @@ async function syncToPlatform(platformId, content) {
             console.log('[COSE] 小红书开始填充内容...')
 
             // 等待并查找标题输入框
-            const titleInput = await waitForElement('input[placeholder*="标题"], textarea[placeholder*="标题"], .title-input', 5000)
+            const titleInput = await waitForElement(
+              'input[placeholder*="标题"], textarea[placeholder*="标题"], .title-input',
+              5000
+            )
             if (titleInput && title) {
               titleInput.focus()
-              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+              // 使用 native setter 确保 React/Vue 等框架能检测到变化
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype,
+                'value'
+              )?.set
               if (nativeSetter) {
                 nativeSetter.call(titleInput, title)
               } else {
@@ -915,14 +954,19 @@ async function syncToPlatform(platformId, content) {
             await new Promise(r => setTimeout(r, 300))
 
             // 等待并查找内容编辑器
-            const contentEditor = await waitForElement('[contenteditable="true"], .editor-content, .content-editor', 5000)
+            const contentEditor = await waitForElement(
+              '[contenteditable="true"], .editor-content, .content-editor',
+              5000
+            )
             if (contentEditor && htmlBody) {
               contentEditor.focus()
 
               // 清空现有占位符内容
-              if (contentEditor.textContent.includes('从这里开始写正文') ||
+              if (
+                contentEditor.textContent.includes('从这里开始写正文') ||
                 contentEditor.textContent.includes('请输入正文') ||
-                contentEditor.textContent.includes('写点什么')) {
+                contentEditor.textContent.includes('写点什么')
+              ) {
                 contentEditor.innerHTML = ''
               }
 
@@ -930,7 +974,27 @@ async function syncToPlatform(platformId, content) {
               const { wordCount, imageCount } = await window.injectHtmlWithImages(contentEditor, htmlBody, imageCache)
               console.log(`[COSE] 小红书内容已注入: ${wordCount} 字, ${imageCount} 张图片`)
 
-              return { success: true, method: 'paste-html', length: htmlBody.length, images: imageCount }
+              const pasteEvent = new ClipboardEvent('paste', {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: dt,
+              })
+
+              contentEditor.dispatchEvent(pasteEvent)
+              console.log('[COSE] 小红书内容已通过 paste 事件注入')
+
+              // 等待内容渲染
+              await new Promise(r => setTimeout(r, 500))
+
+              // 验证内容是否注入成功
+              const wordCount = contentEditor.textContent?.length || 0
+              if (wordCount === 0) {
+                // 备用方案：直接设置 innerHTML
+                console.log('[COSE] paste 事件未生效，尝试备用方案')
+                contentEditor.innerHTML = htmlBody
+              }
+
+              return { success: true, method: 'paste-html', length: htmlBody.length }
             }
 
             return { success: false, error: 'Content editor not found' }
@@ -973,12 +1037,13 @@ async function syncToPlatform(platformId, content) {
       const clickResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: async () => {
-          const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
           // 查找 create 按钮
-          const createBtn = document.querySelector('button[aria-label="create"]') ||
-            Array.from(document.querySelectorAll('button')).find(b =>
-              b.getAttribute('aria-label')?.toLowerCase() === 'create'
+          const createBtn =
+            document.querySelector('button[aria-label="create"]') ||
+            Array.from(document.querySelectorAll('button')).find(
+              b => b.getAttribute('aria-label')?.toLowerCase() === 'create'
             )
 
           if (createBtn) {
@@ -997,7 +1062,10 @@ async function syncToPlatform(platformId, content) {
             }
 
             const editorLoaded = await waitForEditor()
-            return { success: editorLoaded, message: editorLoaded ? 'Editor loaded' : 'Editor timeout' }
+            return {
+              success: editorLoaded,
+              message: editorLoaded ? 'Editor loaded' : 'Editor timeout',
+            }
           }
 
           return { success: false, message: 'Create button not found' }
@@ -1018,7 +1086,11 @@ async function syncToPlatform(platformId, content) {
       }
 
       if (!clickResult[0]?.result?.success) {
-        return { success: false, message: 'Twitter Articles 创建文章失败: ' + (clickResult[0]?.result?.message || '未知错误') }
+        return {
+          success: false,
+          message:
+            'Twitter Articles 创建文章失败: ' + (clickResult[0]?.result?.message || '未知错误'),
+        }
       }
 
       // 等待页面稳定
@@ -1033,7 +1105,7 @@ async function syncToPlatform(platformId, content) {
         target: { tabId: tab.id },
         func: async (title, markdown, imageCache) => {
           // ========== 工具函数 ==========
-          const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
           const waitForElement = async (selector, timeout = 10000) => {
             const start = Date.now()
@@ -1044,8 +1116,6 @@ async function syncToPlatform(platformId, content) {
             }
             return null
           }
-
-
 
           // ========== 内置 Markdown 解析器（支持代码块和公式）==========
           // 使用占位符保护机制，避免正则冲突
@@ -1110,7 +1180,10 @@ async function syncToPlatform(platformId, content) {
             html = html.replace(/^\*\*\*$/gm, '<p>***</p>')
 
             // 处理图片
-            html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width: 100%;" />')
+            html = html.replace(
+              /!\[([^\]]*)\]\(([^)]+)\)/g,
+              '<img src="$2" alt="$1" style="max-width: 100%;" />'
+            )
 
             // 处理链接
             html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
@@ -1180,7 +1253,7 @@ async function syncToPlatform(platformId, content) {
             html = html.replace(/^\d+[\.\)] (.+)$/gm, '<li>$1</li>')
 
             // 将连续的 <li> 包装成 <ul>
-            html = html.replace(/(<li>[\s\S]*?<\/li>\n?)+/g, (match) => {
+            html = html.replace(/(<li>[\s\S]*?<\/li>\n?)+/g, match => {
               return `<ul>${match}</ul>`
             })
 
@@ -1189,9 +1262,10 @@ async function syncToPlatform(platformId, content) {
             const result = []
             let paragraphLines = []
 
-            const isBlockElement = (line) => {
+            const isBlockElement = line => {
               const trimmed = line.trim()
-              return !trimmed ||
+              return (
+                !trimmed ||
                 trimmed.startsWith('<h') ||
                 trimmed.startsWith('<pre') ||
                 trimmed.startsWith('<blockquote') ||
@@ -1203,6 +1277,7 @@ async function syncToPlatform(platformId, content) {
                 trimmed.startsWith('<img') ||
                 trimmed.startsWith('</ul') ||
                 trimmed.startsWith('</ol')
+              )
             }
 
             const flushParagraph = () => {
@@ -1242,10 +1317,16 @@ async function syncToPlatform(platformId, content) {
             console.log('[COSE] Markdown 已转换为 HTML')
 
             // 第一步：填充标题
-            const titleInput = await waitForElement('textarea[placeholder="Add a title"], textarea[name="Article Title"]', 5000)
+            const titleInput = await waitForElement(
+              'textarea[placeholder="Add a title"], textarea[name="Article Title"]',
+              5000
+            )
             if (titleInput && title) {
               titleInput.focus()
-              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype,
+                'value'
+              ).set
               nativeSetter.call(titleInput, title)
               titleInput.dispatchEvent(new Event('input', { bubbles: true }))
               titleInput.dispatchEvent(new Event('change', { bubbles: true }))
@@ -1257,7 +1338,10 @@ async function syncToPlatform(platformId, content) {
             await sleep(500)
 
             // 第二步：填充内容
-            const contentEl = await waitForElement('.public-DraftEditor-content[contenteditable="true"], .DraftEditor-root [contenteditable="true"]', 5000)
+            const contentEl = await waitForElement(
+              '.public-DraftEditor-content[contenteditable="true"], .DraftEditor-root [contenteditable="true"]',
+              5000
+            )
             if (contentEl && htmlContent) {
               contentEl.focus()
 
@@ -1265,7 +1349,15 @@ async function syncToPlatform(platformId, content) {
               const { imageCount } = await window.injectHtmlWithImages(contentEl, htmlContent, imageCache)
               console.log(`[COSE] Twitter Articles 内容已注入, ${imageCount} 张图片`)
 
-              return { success: true, method: 'paste-html', length: htmlContent.length, images: imageCount }
+              const pasteEvent = new ClipboardEvent('paste', {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: dt,
+              })
+
+              contentEl.dispatchEvent(pasteEvent)
+              console.log('[COSE] Twitter Articles 内容填充成功')
+              return { success: true, method: 'paste-html', length: htmlContent.length }
             } else {
               console.log('[COSE] Twitter Articles 未找到内容编辑器')
               return { success: false, error: 'Content editor not found' }
@@ -1301,16 +1393,18 @@ async function syncToPlatform(platformId, content) {
       try {
         await chrome.declarativeNetRequest.updateDynamicRules({
           removeRuleIds: [QIANFAN_BLOCK_RULE_ID],
-          addRules: [{
-            id: QIANFAN_BLOCK_RULE_ID,
-            priority: 1000,
-            action: { type: 'block' },
-            condition: {
-              urlFilter: '*login.bce.baidu.com*',
-              initiatorDomains: ['qianfan.cloud.baidu.com'],
-              resourceTypes: ['main_frame', 'sub_frame']
-            }
-          }]
+          addRules: [
+            {
+              id: QIANFAN_BLOCK_RULE_ID,
+              priority: 1000,
+              action: { type: 'block' },
+              condition: {
+                urlFilter: '*login.bce.baidu.com*',
+                initiatorDomains: ['qianfan.cloud.baidu.com'],
+                resourceTypes: ['main_frame', 'sub_frame'],
+              },
+            },
+          ],
         })
         console.log('[COSE] 千帆登录页阻止规则已添加')
       } catch (e) {
@@ -1357,19 +1451,25 @@ async function syncToPlatform(platformId, content) {
         // 填充标题和内容（含图片粘贴替换）
         const fillResult = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          func: async (title, markdown, imageCache) => {
-            const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+          func: async (title, markdown) => {
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
             const waitForElement = (selector, timeout = 5000) => {
-              return new Promise((resolve) => {
+              return new Promise(resolve => {
                 const el = document.querySelector(selector)
                 if (el) return resolve(el)
                 const observer = new MutationObserver(() => {
                   const el = document.querySelector(selector)
-                  if (el) { observer.disconnect(); resolve(el) }
+                  if (el) {
+                    observer.disconnect()
+                    resolve(el)
+                  }
                 })
                 observer.observe(document.body, { childList: true, subtree: true })
-                setTimeout(() => { observer.disconnect(); resolve(null) }, timeout)
+                setTimeout(() => {
+                  observer.disconnect()
+                  resolve(null)
+                }, timeout)
               })
             }
 
@@ -1378,7 +1478,10 @@ async function syncToPlatform(platformId, content) {
               const titleInput = await waitForElement('textarea[placeholder="请输入文章标题"]')
               if (titleInput && title) {
                 titleInput.focus()
-                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                  window.HTMLTextAreaElement.prototype,
+                  'value'
+                ).set
                 nativeSetter.call(titleInput, title)
                 titleInput.dispatchEvent(new Event('input', { bubbles: true }))
                 console.log('[COSE] 百度千帆标题填充成功')
@@ -1387,7 +1490,9 @@ async function syncToPlatform(platformId, content) {
               await sleep(300)
 
               // 填充内容 - 使用 paste 事件注入 Markdown
-              const contentEditor = await waitForElement('.mp-editor-container[contenteditable="true"]')
+              const contentEditor = await waitForElement(
+                '.mp-editor-container[contenteditable="true"]'
+              )
               if (contentEditor && markdown) {
                 contentEditor.focus()
                 await sleep(100)
@@ -1395,7 +1500,9 @@ async function syncToPlatform(platformId, content) {
                 const dt = new DataTransfer()
                 dt.setData('text/plain', markdown)
                 const pasteEvent = new ClipboardEvent('paste', {
-                  bubbles: true, cancelable: true, clipboardData: dt
+                  bubbles: true,
+                  cancelable: true,
+                  clipboardData: dt,
                 })
                 contentEditor.dispatchEvent(pasteEvent)
                 console.log('[COSE] 百度千帆内容填充成功')
@@ -1467,7 +1574,7 @@ async function syncToPlatform(platformId, content) {
         chrome.tabs.onUpdated.removeListener(tabUpdateListener)
         try {
           await chrome.declarativeNetRequest.updateDynamicRules({
-            removeRuleIds: [QIANFAN_BLOCK_RULE_ID]
+            removeRuleIds: [QIANFAN_BLOCK_RULE_ID],
           })
           console.log('[COSE] 千帆登录页阻止规则已移除')
         } catch (_) {}
@@ -1483,7 +1590,7 @@ async function syncToPlatform(platformId, content) {
         chrome.tabs.onUpdated.removeListener(tabUpdateListener)
         try {
           await chrome.declarativeNetRequest.updateDynamicRules({
-            removeRuleIds: [QIANFAN_BLOCK_RULE_ID]
+            removeRuleIds: [QIANFAN_BLOCK_RULE_ID],
           })
         } catch (_) {}
         return { success: false, message: '千帆同步失败: ' + e.message }
@@ -1563,7 +1670,7 @@ async function syncToPlatform(platformId, content) {
           func: async (title, htmlBody) => {
             // 等待元素出现的工具函数
             const waitForElement = (selector, timeout = 15000) => {
-              return new Promise((resolve) => {
+              return new Promise(resolve => {
                 const el = document.querySelector(selector)
                 if (el) return resolve(el)
 
@@ -1597,7 +1704,10 @@ async function syncToPlatform(platformId, content) {
               if (titleInput && title) {
                 titleInput.focus()
                 // 使用 native setter 确保 React/Vue 等框架能检测到变化
-                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                  window.HTMLTextAreaElement.prototype,
+                  'value'
+                )?.set
                 if (nativeSetter) {
                   nativeSetter.call(titleInput, title)
                 } else {
@@ -1628,7 +1738,7 @@ async function syncToPlatform(platformId, content) {
                 const pasteEvent = new ClipboardEvent('paste', {
                   bubbles: true,
                   cancelable: true,
-                  clipboardData: dt
+                  clipboardData: dt,
                 })
 
                 editor.dispatchEvent(pasteEvent)
@@ -1649,7 +1759,7 @@ async function syncToPlatform(platformId, content) {
                 return {
                   success: true,
                   wordCount: editor.textContent?.length || 0,
-                  titleFilled: titleInput?.value === title
+                  titleFilled: titleInput?.value === title,
                 }
               }
 
@@ -1706,8 +1816,9 @@ async function syncToPlatform(platformId, content) {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
-          const saveDraftBtn = Array.from(document.querySelectorAll('button'))
-            .find(b => b.textContent.includes('保存为草稿'))
+          const saveDraftBtn = Array.from(document.querySelectorAll('button')).find(b =>
+            b.textContent.includes('保存为草稿')
+          )
           if (saveDraftBtn) {
             saveDraftBtn.click()
             console.log('[COSE] 已点击保存为草稿')
@@ -1736,7 +1847,7 @@ async function syncToPlatform(platformId, content) {
           func: async (title, htmlBody, imageCache) => {
             // 等待元素出现的工具函数（检测到立即返回）
             const waitForElement = (selector, timeout = 10000) => {
-              return new Promise((resolve) => {
+              return new Promise(resolve => {
                 const el = document.querySelector(selector)
                 if (el) return resolve(el)
 
@@ -1770,7 +1881,10 @@ async function syncToPlatform(platformId, content) {
               if (titleInput && title) {
                 titleInput.focus()
                 // 使用 native setter 确保 React 等框架能检测到变化
-                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                  window.HTMLInputElement.prototype,
+                  'value'
+                )?.set
                 if (nativeSetter) {
                   nativeSetter.call(titleInput, title)
                 } else {
@@ -1789,15 +1903,32 @@ async function syncToPlatform(platformId, content) {
                 editor.innerHTML = ''
 
                 // 使用 ClipboardEvent + DataTransfer 注入 HTML
-                // 注入 HTML 内容（自动处理图片）
-                const { wordCount, imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
-                console.log(`[COSE] 抖音内容已注入: ${wordCount} 字, ${imageCount} 张图片`)
+                const dt = new DataTransfer()
+                dt.setData('text/html', htmlBody)
+                dt.setData('text/plain', htmlBody.replace(/<[^>]*>/g, ''))
+
+                const pasteEvent = new ClipboardEvent('paste', {
+                  bubbles: true,
+                  cancelable: true,
+                  clipboardData: dt,
+                })
+
+                editor.dispatchEvent(pasteEvent)
+                console.log('[COSE] 抖音内容已通过 paste 事件注入')
+
+                // 立即验证内容是否注入成功
+                const wordCount = editor.textContent?.length || 0
+                if (wordCount === 0) {
+                  // 备用方案：直接设置 innerHTML
+                  console.log('[COSE] paste 事件未生效，尝试备用方案')
+                  editor.innerHTML = htmlBody
+                  editor.dispatchEvent(new Event('input', { bubbles: true }))
+                }
 
                 return {
                   success: true,
                   wordCount: editor.textContent?.length || 0,
                   titleFilled: titleInput?.value === title,
-                  images: imageCount,
                 }
               }
 
@@ -1849,7 +1980,10 @@ async function syncToPlatform(platformId, content) {
           const titleInput = document.querySelector('input[placeholder*="标题"]')
           if (titleInput && title) {
             titleInput.focus()
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+            const nativeSetter = Object.getOwnPropertyDescriptor(
+              window.HTMLInputElement.prototype,
+              'value'
+            ).set
             nativeSetter.call(titleInput, title)
             titleInput.dispatchEvent(new Event('input', { bubbles: true }))
             titleInput.dispatchEvent(new Event('change', { bubbles: true }))
@@ -1868,7 +2002,14 @@ async function syncToPlatform(platformId, content) {
             const { imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
             console.log(`[COSE] 搜狐号内容已注入, ${imageCount} 张图片`)
 
-            return { success: true, images: imageCount }
+            const pasteEvent = new ClipboardEvent('paste', {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: dt,
+            })
+
+            editor.dispatchEvent(pasteEvent)
+            console.log('[COSE] 搜狐号内容已通过 paste 事件注入')
           } else {
             console.log('[COSE] 搜狐号未找到编辑器')
             return { success: false, error: 'Editor not found' }
@@ -1897,7 +2038,7 @@ async function syncToPlatform(platformId, content) {
       const waitForEditor = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
-          return new Promise((resolve) => {
+          return new Promise(resolve => {
             const startTime = Date.now()
             const maxWait = 10000
 
@@ -1997,7 +2138,6 @@ async function syncToPlatform(platformId, content) {
           return {
             success: true,
             contentLength: editor.getContentLength(),
-            images: imageCount,
           }
         },
         args: [content.title, htmlContent, serializedImageCache || null],
@@ -2018,8 +2158,9 @@ async function syncToPlatform(platformId, content) {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
-          const saveDraftBtn = Array.from(document.querySelectorAll('button'))
-            .find(b => b.textContent && b.textContent.includes('存草稿'))
+          const saveDraftBtn = Array.from(document.querySelectorAll('button')).find(
+            b => b.textContent && b.textContent.includes('存草稿')
+          )
           if (saveDraftBtn) {
             saveDraftBtn.click()
             console.log('[COSE] B站专栏已点击存草稿')
@@ -2084,8 +2225,9 @@ async function syncToPlatform(platformId, content) {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
-          const saveBtn = Array.from(document.querySelectorAll('button'))
-            .find(b => b.textContent && b.textContent.includes('保存草稿'))
+          const saveBtn = Array.from(document.querySelectorAll('button')).find(
+            b => b.textContent && b.textContent.includes('保存草稿')
+          )
           if (saveBtn) {
             saveBtn.click()
             console.log('[COSE] 微博头条已点击保存草稿')
@@ -2118,7 +2260,10 @@ async function syncToPlatform(platformId, content) {
           if (titleInput && title) {
             titleInput.focus()
             // 使用 native setter 来绕过 React 的受控组件
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+            const nativeSetter = Object.getOwnPropertyDescriptor(
+              window.HTMLInputElement.prototype,
+              'value'
+            ).set
             nativeSetter.call(titleInput, title)
             titleInput.dispatchEvent(new Event('input', { bubbles: true }))
             titleInput.dispatchEvent(new Event('change', { bubbles: true }))
@@ -2126,14 +2271,18 @@ async function syncToPlatform(platformId, content) {
           }
 
           // 填充内容 - 阿里云使用 textarea 作为 Markdown 编辑器
-          const contentTextarea = document.querySelector('textarea[class*="editor"]') ||
+          const contentTextarea =
+            document.querySelector('textarea[class*="editor"]') ||
             document.querySelector('.markdown-editor textarea') ||
             document.querySelector('textarea:not([placeholder*="标题"])')
 
           if (contentTextarea && markdown) {
             contentTextarea.focus()
             // 使用 native setter 来绕过 React 的受控组件
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+            const nativeSetter = Object.getOwnPropertyDescriptor(
+              window.HTMLTextAreaElement.prototype,
+              'value'
+            ).set
             nativeSetter.call(contentTextarea, markdown)
             contentTextarea.dispatchEvent(new Event('input', { bubbles: true }))
             contentTextarea.dispatchEvent(new Event('change', { bubbles: true }))
@@ -2225,12 +2374,17 @@ async function syncToPlatform(platformId, content) {
           }
 
           // 填充标题
-          const titleInput = document.querySelector('input[placeholder*="标题"]') ||
+          const titleInput =
+            document.querySelector('input[placeholder*="标题"]') ||
             document.querySelector('input[class*="title"]') ||
             document.querySelector('.article-title input')
           if (titleInput && title) {
             titleInput.focus()
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+            // 使用 native setter 来绕过 React 的受控组件
+            const nativeSetter = Object.getOwnPropertyDescriptor(
+              window.HTMLInputElement.prototype,
+              'value'
+            ).set
             nativeSetter.call(titleInput, title)
             titleInput.dispatchEvent(new Event('input', { bubbles: true }))
             titleInput.dispatchEvent(new Event('change', { bubbles: true }))
@@ -2274,12 +2428,16 @@ async function syncToPlatform(platformId, content) {
           }
 
           // 备用方案：尝试直接操作 textarea
-          const contentTextarea = document.querySelector('.bytemd-editor textarea') ||
+          const contentTextarea =
+            document.querySelector('.bytemd-editor textarea') ||
             document.querySelector('textarea:not([placeholder*="标题"])')
 
           if (contentTextarea && markdown) {
             contentTextarea.focus()
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+            const nativeSetter = Object.getOwnPropertyDescriptor(
+              window.HTMLTextAreaElement.prototype,
+              'value'
+            ).set
             nativeSetter.call(contentTextarea, markdown)
             contentTextarea.dispatchEvent(new Event('input', { bubbles: true }))
             contentTextarea.dispatchEvent(new Event('change', { bubbles: true }))
@@ -2357,7 +2515,7 @@ async function syncToPlatform(platformId, content) {
       // 填充标题
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (title) => {
+        func: title => {
           const titleInput = document.querySelector('input[placeholder*="标题"]')
           if (titleInput && title) {
             titleInput.focus()
@@ -2375,10 +2533,10 @@ async function syncToPlatform(platformId, content) {
       // 使用 MutationObserver 监听 iframe 出现，message 事件监听内容确认
       const fillResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: async (markdown) => {
+        func: async markdown => {
           // 工具函数：使用 MutationObserver 等待 iframe 元素出现并加载
           const waitForEditorReady = (timeout = 15000) => {
-            return new Promise((resolve) => {
+            return new Promise(resolve => {
               const check = () => {
                 const editor = window.tinymceModal?.currentEditor
                 if (editor && typeof editor.setContent === 'function') {
@@ -2420,20 +2578,25 @@ async function syncToPlatform(platformId, content) {
 
           // 工具函数：使用 message 事件监听 setContent 确认（setMdDataSucc）
           const setContentWithConfirm = (editor, iframe, content, timeout = 3000) => {
-            return new Promise((resolve) => {
+            return new Promise(resolve => {
               let resolved = false
 
-              const onMessage = (event) => {
+              const onMessage = event => {
                 try {
                   const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
-                  if (data.mdEventAction === 'setMdDataSucc' || data.mdEventAction === 'mdContent') {
+                  if (
+                    data.mdEventAction === 'setMdDataSucc' ||
+                    data.mdEventAction === 'mdContent'
+                  ) {
                     if (!resolved) {
                       resolved = true
                       window.removeEventListener('message', onMessage)
                       resolve({ confirmed: true })
                     }
                   }
-                } catch (e) { /* 忽略非 JSON 消息 */ }
+                } catch (e) {
+                  /* 忽略非 JSON 消息 */
+                }
               }
 
               window.addEventListener('message', onMessage)
@@ -2477,10 +2640,13 @@ async function syncToPlatform(platformId, content) {
 
           // 3. 所有重试失败，直接 postMessage 作为最后手段
           console.log('[COSE] 重试耗尽，尝试直接 postMessage')
-          ready.iframe.contentWindow.postMessage(JSON.stringify({
-            mdEditorEventAction: 'setMdEditorContent',
-            data: encodeURIComponent(markdown)
-          }), '*')
+          ready.iframe.contentWindow.postMessage(
+            JSON.stringify({
+              mdEditorEventAction: 'setMdEditorContent',
+              data: encodeURIComponent(markdown),
+            }),
+            '*'
+          )
           await new Promise(r => setTimeout(r, 1000))
           return { success: true, method: 'direct-postMessage', length: markdown.length }
         },
@@ -2537,7 +2703,8 @@ async function syncToPlatform(platformId, content) {
             const modalBtns = document.querySelector('.ant-modal-confirm-btns')
             if (modalBtns) {
               const buttons = modalBtns.querySelectorAll('button')
-              const modalText = document.querySelector('.ant-modal-confirm-content')?.textContent || ''
+              const modalText =
+                document.querySelector('.ant-modal-confirm-content')?.textContent || ''
 
               console.log('[COSE] 检测到 Ant Modal:', modalText.substring(0, 50))
 
@@ -2595,7 +2762,7 @@ async function syncToPlatform(platformId, content) {
           }
 
           // ========== 工具函数 ==========
-          const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
           // 轮询检查弹窗（比 MutationObserver 更可靠）
           let dialogCheckInterval = null
@@ -2732,7 +2899,10 @@ async function syncToPlatform(platformId, content) {
             const titleInput = document.querySelector('input[placeholder*="标题"]')
             if (titleInput && title) {
               titleInput.focus()
-              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype,
+                'value'
+              ).set
               nativeSetter.call(titleInput, title)
               titleInput.dispatchEvent(new Event('input', { bubbles: true }))
               titleInput.dispatchEvent(new Event('change', { bubbles: true }))
@@ -2749,7 +2919,6 @@ async function syncToPlatform(platformId, content) {
             }
 
             return { success: true, method: 'ace', length: markdown.length }
-
           } finally {
             // 清理检查器
             stopDialogChecker()
@@ -2782,8 +2951,11 @@ async function syncToPlatform(platformId, content) {
         target: { tabId: tab.id },
         func: async (title, htmlBody, imageCache) => {
           // 填充标题 - 百家号标题在 contenteditable div 中
-          const titleEditor = document.querySelector('.client_components_titleInput [contenteditable="true"]') ||
-            document.querySelector('.client_pages_edit_components_titleInput [contenteditable="true"]') ||
+          const titleEditor =
+            document.querySelector('.client_components_titleInput [contenteditable="true"]') ||
+            document.querySelector(
+              '.client_pages_edit_components_titleInput [contenteditable="true"]'
+            ) ||
             document.querySelector('[class*="titleInput"] [contenteditable="true"]')
 
           if (titleEditor && title) {
@@ -2800,53 +2972,64 @@ async function syncToPlatform(platformId, content) {
           // 等待一下再填充内容
           await new Promise(r => setTimeout(r, 500))
 
-          // 尝试通过 UEditor API 填充
-          if (window.UE_V2 && window.UE_V2.instants && window.UE_V2.instants.ueditorInstant0) {
-            try {
-              const editor = window.UE_V2.instants.ueditorInstant0
-
-              // 提取原始 HTML 中的公式（包含完整 SVG）
-              const tempDiv = document.createElement('div')
-              tempDiv.innerHTML = htmlBody
-              const originalFormulas = []
-              tempDiv.querySelectorAll('.katex-inline, .katex-block, section.katex-block').forEach((formula, index) => {
-                const svg = formula.querySelector('svg')
-                if (svg && svg.innerHTML) {
-                  originalFormulas.push({
-                    index,
-                    className: formula.className,
-                    fullHtml: formula.outerHTML
+                // 提取原始 HTML 中的公式（包含完整 SVG）
+                const tempDiv = document.createElement('div')
+                tempDiv.innerHTML = htmlBody
+                const originalFormulas = []
+                tempDiv
+                  .querySelectorAll('.katex-inline, .katex-block, section.katex-block')
+                  .forEach((formula, index) => {
+                    const svg = formula.querySelector('svg')
+                    if (svg && svg.innerHTML) {
+                      originalFormulas.push({
+                        index,
+                        className: formula.className,
+                        fullHtml: formula.outerHTML,
+                      })
+                    }
                   })
+                console.log('[COSE] 百家号提取到', originalFormulas.length, '个公式')
+
+                // 先用 setContent 设置内容（公式 SVG 会被过滤）
+                editor.setContent(htmlBody)
+
+                // 然后直接向 iframe 注入完整的公式 SVG
+                if (originalFormulas.length > 0) {
+                  setTimeout(() => {
+                    const iframe = document.querySelector('iframe')
+                    if (iframe && iframe.contentDocument) {
+                      const iframeDoc = iframe.contentDocument
+                      const emptyFormulas = iframeDoc.querySelectorAll(
+                        '.katex-inline, .katex-block, section.katex-block'
+                      )
+
+                      emptyFormulas.forEach((emptyFormula, index) => {
+                        const original = originalFormulas[index]
+                        if (original) {
+                          // 创建新元素并替换
+                          const newElement = document.createElement('div')
+                          newElement.innerHTML = original.fullHtml
+                          const newFormula = newElement.firstElementChild
+                          if (newFormula && emptyFormula.parentNode) {
+                            emptyFormula.parentNode.replaceChild(newFormula, emptyFormula)
+                          }
+                        }
+                      })
+
+                      console.log('[COSE] 百家号公式 SVG 已恢复')
+                      editor.fireEvent('contentChange')
+                    }
+                  }, 300)
                 }
               })
               console.log('[COSE] 百家号提取到', originalFormulas.length, '个公式')
 
-              // 先用 setContent 设置内容（公式 SVG 会被过滤）
-              editor.setContent(htmlBody)
-
-              // 然后直接向 iframe 注入完整的公式 SVG
-              if (originalFormulas.length > 0) {
-                await new Promise(r => setTimeout(r, 300))
-                const iframe = document.querySelector('iframe')
-                if (iframe && iframe.contentDocument) {
-                  const iframeDoc = iframe.contentDocument
-                  const emptyFormulas = iframeDoc.querySelectorAll('.katex-inline, .katex-block, section.katex-block')
-
-                  emptyFormulas.forEach((emptyFormula, index) => {
-                    const original = originalFormulas[index]
-                    if (original) {
-                      const newElement = document.createElement('div')
-                      newElement.innerHTML = original.fullHtml
-                      const newFormula = newElement.firstElementChild
-                      if (newFormula && emptyFormula.parentNode) {
-                        emptyFormula.parentNode.replaceChild(newFormula, emptyFormula)
-                      }
-                    }
-                  })
-
-                  console.log('[COSE] 百家号公式 SVG 已恢复')
-                  editor.fireEvent('contentChange')
-                }
+                editor.fireEvent('contentChange')
+                editor.fireEvent('selectionchange')
+                console.log('[COSE] 百家号通过 UEditor API 填充成功')
+                return
+              } catch (e) {
+                console.log('[COSE] 百家号 UEditor API 调用失败', e)
               }
 
               editor.fireEvent('contentChange');
@@ -2886,22 +3069,32 @@ async function syncToPlatform(platformId, content) {
         target: { tabId: tab.id },
         func: async (title, htmlBody, imageCache) => {
           // 填充标题 - 少数派使用 textarea
-          const titleInput = document.querySelector('textarea[placeholder*="标题"]') ||
+          const titleInput =
+            document.querySelector('textarea[placeholder*="标题"]') ||
             document.querySelector('input[placeholder*="标题"]')
 
           if (titleInput && title) {
             titleInput.focus()
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set ||
+            // 使用 native setter 来绕过 Vue/React 的受控组件
+            const nativeSetter =
+              Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set ||
               Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
             nativeSetter.call(titleInput, title)
-            titleInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: title, inputType: 'insertText' }))
+            // 触发事件
+            titleInput.dispatchEvent(
+              new InputEvent('input', { bubbles: true, data: title, inputType: 'insertText' })
+            )
             titleInput.dispatchEvent(new Event('change', { bubbles: true }))
             titleInput.dispatchEvent(new Event('blur', { bubbles: true }))
             console.log('[COSE] 少数派标题已填充')
           }
 
           // 等待一下再填充内容
-          await new Promise(r => setTimeout(r, 500))
+          setTimeout(() => {
+            // 找到 ProseMirror 编辑器
+            const editor =
+              document.querySelector('.ProseMirror') ||
+              document.querySelector('[contenteditable="true"]')
 
           // 找到 ProseMirror 编辑器
           const editor = document.querySelector('.ProseMirror') ||
@@ -2910,9 +3103,11 @@ async function syncToPlatform(platformId, content) {
           if (editor && htmlBody) {
             editor.focus()
 
-            // 注入 HTML 内容（自动处理图片）
-            const { imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
-            console.log(`[COSE] 少数派内容已注入, ${imageCount} 张图片`)
+              const pasteEvent = new ClipboardEvent('paste', {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: dt,
+              })
 
             return { success: true, images: imageCount }
           }
@@ -2950,7 +3145,7 @@ async function syncToPlatform(platformId, content) {
         func: async (title, htmlBody, imageCache) => {
           // 等待元素出现的工具函数
           const waitForElement = (selector, timeout = 10000) => {
-            return new Promise((resolve) => {
+            return new Promise(resolve => {
               const el = document.querySelector(selector)
               if (el) return resolve(el)
 
@@ -2974,13 +3169,20 @@ async function syncToPlatform(platformId, content) {
             console.log('[COSE] 支付宝开放平台开始填充内容...')
 
             // 等待并查找标题输入框
-            const titleInput = await waitForElement('#title', 5000) || await waitForElement('input[placeholder*="标题"]', 5000)
+            const titleInput =
+              (await waitForElement('#title', 5000)) ||
+              (await waitForElement('input[placeholder*="标题"]', 5000))
             if (titleInput && title) {
               titleInput.focus()
 
               // Ant Design 输入框需要特殊处理
               titleInput.value = ''
-              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+
+              // 使用 native setter 确保 React 能检测到变化
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype,
+                'value'
+              )?.set
               if (nativeSetter) {
                 nativeSetter.call(titleInput, title)
               } else {
@@ -3003,7 +3205,7 @@ async function syncToPlatform(platformId, content) {
                 bubbles: true,
                 cancelable: true,
                 data: title,
-                inputType: 'insertText'
+                inputType: 'insertText',
               })
               titleInput.dispatchEvent(inputEvent)
 
@@ -3025,7 +3227,28 @@ async function syncToPlatform(platformId, content) {
               const { wordCount, imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
               console.log(`[COSE] 支付宝开放平台内容已注入: ${wordCount} 字, ${imageCount} 张图片`)
 
-              return { success: true, method: 'paste-html', length: htmlBody.length, images: imageCount }
+              const pasteEvent = new ClipboardEvent('paste', {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: dt,
+              })
+
+              editor.dispatchEvent(pasteEvent)
+              console.log('[COSE] 支付宝开放平台内容已通过 paste 事件注入')
+
+              // 等待内容渲染
+              await new Promise(r => setTimeout(r, 500))
+
+              // 验证内容是否注入成功
+              const wordCount = editor.textContent?.length || 0
+              if (wordCount === 0) {
+                // 备用方案：直接设置 innerHTML
+                console.log('[COSE] paste 事件未生效，尝试备用方案')
+                editor.innerHTML = htmlBody
+                editor.dispatchEvent(new Event('input', { bubbles: true }))
+              }
+
+              return { success: true, method: 'paste-html', length: htmlBody.length }
             }
 
             return { success: false, error: 'ne-engine editor not found' }
@@ -3085,7 +3308,7 @@ async function syncToPlatform(platformId, content) {
 
           // 等待元素出现的工具函数
           const waitForElement = (selector, timeout = 10000) => {
-            return new Promise((resolve) => {
+            return new Promise(resolve => {
               const el = document.querySelector(selector)
               if (el) return resolve(el)
 
@@ -3109,10 +3332,17 @@ async function syncToPlatform(platformId, content) {
             console.log('[COSE] 电子发烧友开始填充内容...')
 
             // 等待并查找标题输入框
-            const titleInput = await waitForElement('input[placeholder*="标题"], input.title-input, input[name="title"]', 5000)
+            const titleInput = await waitForElement(
+              'input[placeholder*="标题"], input.title-input, input[name="title"]',
+              5000
+            )
             if (titleInput && title) {
               titleInput.focus()
-              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+              // 使用 native setter 确保框架能检测到变化
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype,
+                'value'
+              )?.set
               if (nativeSetter) {
                 nativeSetter.call(titleInput, title)
               } else {
@@ -3139,7 +3369,7 @@ async function syncToPlatform(platformId, content) {
               const pasteEvent = new ClipboardEvent('paste', {
                 bubbles: true,
                 cancelable: true,
-                clipboardData: dt
+                clipboardData: dt,
               })
 
               vditorWysiwyg.dispatchEvent(pasteEvent)
@@ -3226,10 +3456,16 @@ async function syncToPlatform(platformId, content) {
             }
 
             // 尝试查找 textarea
-            const textarea = await waitForElement('textarea.content-textarea, textarea[name="content"], textarea', 5000)
+            const textarea = await waitForElement(
+              'textarea.content-textarea, textarea[name="content"], textarea',
+              5000
+            )
             if (textarea && markdown) {
               textarea.focus()
-              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype,
+                'value'
+              )?.set
               if (nativeSetter) {
                 nativeSetter.call(textarea, markdown)
               } else {
@@ -3293,8 +3529,9 @@ async function syncToPlatform(platformId, content) {
             const fullText = title ? `${title}\n\n${text}` : text
 
             // 豆瓣当前输入框：Lexical contenteditable
-            const editable = document.querySelector('div.DRE-inputor.DRE-root[contenteditable="true"]')
-              || document.querySelector('[contenteditable="true"][role="textbox"]')
+            const editable =
+              document.querySelector('div.DRE-inputor.DRE-root[contenteditable="true"]') ||
+              document.querySelector('[contenteditable="true"][role="textbox"]')
 
             if (editable) {
               editable.focus()
@@ -3304,9 +3541,19 @@ async function syncToPlatform(platformId, content) {
               if (lexicalEditor?.parseEditorState && lexicalEditor?.setEditorState) {
                 try {
                   const lines = fullText.split('\n')
-                  const makeParagraph = (lineText) => ({
+                  const makeParagraph = lineText => ({
                     children: lineText
-                      ? [{ detail: 0, format: 0, mode: 'normal', style: '', text: lineText, type: 'text', version: 1 }]
+                      ? [
+                          {
+                            detail: 0,
+                            format: 0,
+                            mode: 'normal',
+                            style: '',
+                            text: lineText,
+                            type: 'text',
+                            version: 1,
+                          },
+                        ]
                       : [],
                     direction: 'ltr',
                     format: '',
@@ -3368,11 +3615,13 @@ async function syncToPlatform(platformId, content) {
               if (!inserted) {
                 // 回退：直接赋值并触发输入事件
                 editable.textContent = fullText
-                editable.dispatchEvent(new InputEvent('input', {
-                  bubbles: true,
-                  inputType: 'insertText',
-                  data: fullText,
-                }))
+                editable.dispatchEvent(
+                  new InputEvent('input', {
+                    bubbles: true,
+                    inputType: 'insertText',
+                    data: fullText,
+                  })
+                )
               }
 
               editable.dispatchEvent(new Event('change', { bubbles: true }))
@@ -3387,13 +3636,17 @@ async function syncToPlatform(platformId, content) {
             }
 
             // 兼容旧版 textarea 结构
-            const textarea = document.querySelector('textarea[placeholder*="此刻你想要分享"]')
-              || document.querySelector('textarea[placeholder*="分享"]')
-              || document.querySelector('textarea')
+            const textarea =
+              document.querySelector('textarea[placeholder*="此刻你想要分享"]') ||
+              document.querySelector('textarea[placeholder*="分享"]') ||
+              document.querySelector('textarea')
 
             if (textarea) {
               textarea.focus()
-              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype,
+                'value'
+              )?.set
               if (nativeSetter) {
                 nativeSetter.call(textarea, fullText)
               } else {
@@ -3453,7 +3706,7 @@ function fillContentOnPage(content, platformId) {
 
   // 等待元素出现的工具函数
   function waitFor(selector, timeout = 10000) {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       const start = Date.now()
       const check = () => {
         const el = document.querySelector(selector)
@@ -3495,9 +3748,14 @@ function fillContentOnPage(content, platformId) {
       if (titleInput) {
         titleInput.focus()
         // 模拟用户输入
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype,
+          'value'
+        ).set
         nativeSetter.call(titleInput, title)
-        titleInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: title, inputType: 'insertText' }))
+        titleInput.dispatchEvent(
+          new InputEvent('input', { bubbles: true, data: title, inputType: 'insertText' })
+        )
         titleInput.dispatchEvent(new Event('change', { bubbles: true }))
         titleInput.dispatchEvent(new Event('blur', { bubbles: true }))
         console.log('[COSE] 头条标题填充成功:', title)
@@ -3568,8 +3826,9 @@ function fillContentOnPage(content, platformId) {
           let confirmBtn = null
           for (let i = 0; i < 20; i++) {
             await new Promise(resolve => setTimeout(resolve, 200))
-            confirmBtn = Array.from(document.querySelectorAll('button'))
-              .find(btn => btn.textContent.trim() === '确定切换')
+            confirmBtn = Array.from(document.querySelectorAll('button')).find(
+              btn => btn.textContent.trim() === '确定切换'
+            )
             if (confirmBtn) break
           }
           if (confirmBtn) {
@@ -3589,7 +3848,10 @@ function fillContentOnPage(content, platformId) {
       const titleInput = await waitFor('input[placeholder*="标题"]')
       if (titleInput) {
         titleInput.focus()
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          'value'
+        )?.set
         if (nativeSetter) {
           nativeSetter.call(titleInput, title)
         } else {
@@ -3612,7 +3874,10 @@ function fillContentOnPage(content, platformId) {
       }
       if (textarea) {
         textarea.focus()
-        const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+        const textareaSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype,
+          'value'
+        )?.set
         if (textareaSetter) {
           textareaSetter.call(textarea, mdContent)
         } else {
@@ -3631,7 +3896,8 @@ function fillContentOnPage(content, platformId) {
       await new Promise(resolve => setTimeout(resolve, 1000))
 
       // 填充标题 - 博客园标题输入框
-      const titleInput = await waitFor('input[placeholder="标题"]') || document.querySelector('input')
+      const titleInput =
+        (await waitFor('input[placeholder="标题"]')) || document.querySelector('input')
       if (titleInput) {
         titleInput.focus()
         titleInput.value = title
@@ -3646,7 +3912,8 @@ function fillContentOnPage(content, platformId) {
       await new Promise(resolve => setTimeout(resolve, 500))
 
       // 博客园使用 id="md-editor" 的 textarea 作为 Markdown 编辑器
-      const editor = document.querySelector('#md-editor') || document.querySelector('textarea.not-resizable')
+      const editor =
+        document.querySelector('#md-editor') || document.querySelector('textarea.not-resizable')
       if (editor) {
         editor.focus()
         editor.value = contentToFill
@@ -3660,7 +3927,9 @@ function fillContentOnPage(content, platformId) {
     // InfoQ
     else if (host.includes('infoq.cn')) {
       // 填充标题
-      const titleInput = await waitFor('input[placeholder*="标题"], .title-input input, input.article-title')
+      const titleInput = await waitFor(
+        'input[placeholder*="标题"], .title-input input, input.article-title'
+      )
       if (titleInput) {
         setInputValue(titleInput, title)
         console.log('[COSE] InfoQ 标题填充成功')
@@ -3675,13 +3944,13 @@ function fillContentOnPage(content, platformId) {
       script.textContent = `
         (async function() {
           const content = ${JSON.stringify(contentToFill)};
-          
+
           // 等待编辑器完全初始化的函数
           const waitForEditor = () => {
             return new Promise((resolve) => {
               let attempts = 0;
               const maxAttempts = 30; // 最多等待 15 秒
-              
+
               const check = () => {
                 attempts++;
                 const gkEditor = document.querySelector('.gk-editor');
@@ -3703,32 +3972,32 @@ function fillContentOnPage(content, platformId) {
               check();
             });
           };
-          
+
           const view = await waitForEditor();
           if (!view) {
             console.log('[COSE] InfoQ 编辑器初始化超时');
             return;
           }
-          
+
           try {
             // 清空编辑器现有内容
             const state = view.state;
             const tr = state.tr.delete(0, state.doc.content.size);
             view.dispatch(tr);
-            
+
             // 聚焦编辑器
             view.focus();
-            
+
             // 使用剪贴板粘贴方式插入内容（会自动解析 Markdown）
             const clipboardData = new DataTransfer();
             clipboardData.setData('text/plain', content);
-            
+
             const pasteEvent = new ClipboardEvent('paste', {
               bubbles: true,
               cancelable: true,
               clipboardData: clipboardData
             });
-            
+
             view.dom.dispatchEvent(pasteEvent);
             console.log('[COSE] InfoQ 内容填充成功');
           } catch (e) {
@@ -3745,9 +4014,14 @@ function fillContentOnPage(content, platformId) {
       const titleInput = await waitFor('input._24i7u, input[class*="title"]')
       if (titleInput) {
         titleInput.focus()
-        const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        const inputSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          'value'
+        ).set
         inputSetter.call(titleInput, title)
-        titleInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: title, inputType: 'insertText' }))
+        titleInput.dispatchEvent(
+          new InputEvent('input', { bubbles: true, data: title, inputType: 'insertText' })
+        )
         titleInput.dispatchEvent(new Event('change', { bubbles: true }))
         titleInput.dispatchEvent(new Event('blur', { bubbles: true }))
         console.log('[COSE] 简书标题填充成功')
@@ -3759,12 +4033,18 @@ function fillContentOnPage(content, platformId) {
       await new Promise(resolve => setTimeout(resolve, 500))
 
       // 简书使用 textarea#arthur-editor 作为 Markdown 编辑器
-      const editor = document.querySelector('#arthur-editor') || document.querySelector('textarea._3swFR')
+      const editor =
+        document.querySelector('#arthur-editor') || document.querySelector('textarea._3swFR')
       if (editor) {
         editor.focus()
-        const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+        const textareaSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype,
+          'value'
+        ).set
         textareaSetter.call(editor, contentToFill)
-        editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: contentToFill, inputType: 'insertText' }))
+        editor.dispatchEvent(
+          new InputEvent('input', { bubbles: true, data: contentToFill, inputType: 'insertText' })
+        )
         editor.dispatchEvent(new Event('change', { bubbles: true }))
         console.log('[COSE] 简书内容填充成功')
       } else {
@@ -3832,7 +4112,10 @@ function fillContentOnPage(content, platformId) {
       const titleInput = document.querySelector('textarea[placeholder*="标题"]')
       if (titleInput && title) {
         titleInput.focus()
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype,
+          'value'
+        ).set
         nativeSetter.call(titleInput, title)
         titleInput.dispatchEvent(new Event('input', { bubbles: true }))
         titleInput.dispatchEvent(new Event('change', { bubbles: true }))
@@ -3883,7 +4166,7 @@ function fillContentOnPage(content, platformId) {
         const pasteEvent = new ClipboardEvent('paste', {
           bubbles: true,
           cancelable: true,
-          clipboardData: dt
+          clipboardData: dt,
         })
 
         contentEl.dispatchEvent(pasteEvent)
@@ -3917,18 +4200,23 @@ function fillContentOnPage(content, platformId) {
           const pasteEvent = new ClipboardEvent('paste', {
             bubbles: true,
             cancelable: true,
-            clipboardData: clipboardData
+            clipboardData: clipboardData,
           })
           textarea.dispatchEvent(pasteEvent)
         } catch (e) {
           // 如果 ClipboardEvent 失败，降级到手动设置
-          const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+          const textareaSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLTextAreaElement.prototype,
+            'value'
+          ).set
           textareaSetter.call(textarea, contentToFill)
-          textarea.dispatchEvent(new InputEvent('input', {
-            bubbles: true,
-            data: contentToFill,
-            inputType: 'insertText'
-          }))
+          textarea.dispatchEvent(
+            new InputEvent('input', {
+              bubbles: true,
+              data: contentToFill,
+              inputType: 'insertText',
+            })
+          )
         }
 
         textarea.dispatchEvent(new Event('change', { bubbles: true }))
@@ -3941,7 +4229,9 @@ function fillContentOnPage(content, platformId) {
         // 查找并点击"转为富文本"按钮
         const findAndClickRichTextBtn = () => {
           // 使用特定选择器
-          const richTextBtn = document.querySelector('[data-testid="menu-item-markdownToDoc"][data-role="markdownToDoc"]')
+          const richTextBtn = document.querySelector(
+            '[data-testid="menu-item-markdownToDoc"][data-role="markdownToDoc"]'
+          )
           if (richTextBtn) {
             console.log('[COSE] ModelScope 找到"转为富文本"按钮，点击中...')
             richTextBtn.click()
@@ -3985,13 +4275,26 @@ function fillContentOnPage(content, platformId) {
     }
     // 通用处理
     else {
-      const titleSelectors = ['input[placeholder*="标题"]', 'input[name="title"]', 'textarea[placeholder*="标题"]']
+      const titleSelectors = [
+        'input[placeholder*="标题"]',
+        'input[name="title"]',
+        'textarea[placeholder*="标题"]',
+      ]
       for (const sel of titleSelectors) {
         const el = document.querySelector(sel)
-        if (el) { setInputValue(el, title); break }
+        if (el) {
+          setInputValue(el, title)
+          break
+        }
       }
 
-      const contentSelectors = ['.CodeMirror', '.ProseMirror', '.ql-editor', '[contenteditable="true"]', 'textarea']
+      const contentSelectors = [
+        '.CodeMirror',
+        '.ProseMirror',
+        '.ql-editor',
+        '[contenteditable="true"]',
+        'textarea',
+      ]
       for (const sel of contentSelectors) {
         const el = document.querySelector(sel)
         if (el) {
@@ -4029,7 +4332,12 @@ function waitForTab(tabId, timeout = 60000) {
         }
         // 如果 URL 已经不是 about:blank/chrome:// 且处于 loading 状态超过 10 秒，
         // 说明主文档已加载但第三方资源可能超时，提前 resolve
-        if (!urlReady && tab.url && !tab.url.startsWith('about:') && !tab.url.startsWith('chrome:')) {
+        if (
+          !urlReady &&
+          tab.url &&
+          !tab.url.startsWith('about:') &&
+          !tab.url.startsWith('chrome:')
+        ) {
           urlReady = true
           urlReadyTime = Date.now()
         }
