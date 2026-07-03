@@ -17,9 +17,43 @@ function getEditorArea(editor) {
   return (editor?.clientHeight || 0) * (editor?.clientWidth || 0)
 }
 
+// 扩展的标题编辑器选择器列表（按优先级排序）
+const TITLE_EDITOR_SELECTORS = [
+  '.title-editor__input .ProseMirror',
+  '.publish_title_editor .ProseMirror',
+  '.article-title-editor .ProseMirror',
+  '[class*="title-editor"] .ProseMirror',
+  '[class*="title_editor"] .ProseMirror',
+  '[class*="titleEditor"] .ProseMirror',
+]
+
 function isWechatTitleEditor(editor, titleEditor) {
+  if (!editor) return false
+  if (editor === titleEditor) return true
+
+  // 检查是否在任意已知的标题编辑器容器内
+  for (const selector of TITLE_EDITOR_SELECTORS) {
+    if (editor.closest?.(selector.split(' .ProseMirror')[0])) return true
+  }
+
+  return false
+}
+
+function findTitleEditor() {
+  for (const selector of TITLE_EDITOR_SELECTORS) {
+    const el = document.querySelector(selector)
+    if (el) return el
+  }
+  return null
+}
+
+function findTitleInput() {
   return (
-    Boolean(editor) && (editor === titleEditor || Boolean(editor.closest?.('.title-editor__input')))
+    document.querySelector('#title') ||
+    document.querySelector('input[placeholder*="标题"]') ||
+    document.querySelector('textarea[placeholder*="标题"]') ||
+    document.querySelector('input[id*="title"]') ||
+    document.querySelector('textarea[id*="title"]')
   )
 }
 
@@ -33,6 +67,7 @@ function pickWechatBodyProseMirrorCandidate(nodes, { titleInput, titleEditor } =
   )
   if (byPlaceholder) return byPlaceholder
 
+  // 按位置筛选：位于标题输入框下方的 editor
   if (titleInput) {
     const band = titleInput.getBoundingClientRect()
     const belowTitle = bodyCandidates.filter(editor => {
@@ -42,6 +77,16 @@ function pickWechatBodyProseMirrorCandidate(nodes, { titleInput, titleEditor } =
     if (belowTitle.length > 0) {
       return belowTitle.sort((a, b) => getEditorArea(b) - getEditorArea(a))[0]
     }
+  }
+
+  // 最后兜底：排除靠近页面顶部的 editor（通常是标题编辑器）
+  const pageTop = 50
+  const notAtTop = bodyCandidates.filter(editor => {
+    const rect = editor.getBoundingClientRect()
+    return rect.top > pageTop
+  })
+  if (notAtTop.length > 0) {
+    return notAtTop.sort((a, b) => getEditorArea(b) - getEditorArea(a))[0]
   }
 
   return bodyCandidates.sort((a, b) => getEditorArea(b) - getEditorArea(a))[0]
@@ -55,19 +100,45 @@ async function fillWechatContent(title, htmlBody) {
    * `querySelector('.ProseMirror')` 常会命中标题编辑器，导致正文 HTML 被贴进标题。
    * 另外，正文编辑器有时会比标题编辑器晚挂载，这时也要继续等待，不能把唯一节点误判成正文。
    */
+  // 标题编辑器选择器列表（与外部保持同步）
+  const TITLE_SELECTORS = [
+    '.title-editor__input .ProseMirror',
+    '.publish_title_editor .ProseMirror',
+    '.article-title-editor .ProseMirror',
+    '[class*="title-editor"] .ProseMirror',
+    '[class*="title_editor"] .ProseMirror',
+    '[class*="titleEditor"] .ProseMirror',
+  ]
+  function findTitleEditor() {
+    for (const sel of TITLE_SELECTORS) {
+      const el = document.querySelector(sel)
+      if (el) return el
+    }
+    return null
+  }
+  function findTitleInput() {
+    return (
+      document.querySelector('#title') ||
+      document.querySelector('input[placeholder*="标题"]') ||
+      document.querySelector('textarea[placeholder*="标题"]') ||
+      document.querySelector('input[id*="title"]') ||
+      document.querySelector('textarea[id*="title"]')
+    )
+  }
   function pickWechatBodyProseMirror() {
-    // 内联辅助函数，确保 chrome.scripting.executeScript 注入时可用
     function getEditorArea(editor) {
       return (editor?.clientHeight || 0) * (editor?.clientWidth || 0)
     }
-    function isWechatTitleEditor(editor, titleEditor) {
-      return (
-        Boolean(editor) &&
-        (editor === titleEditor || Boolean(editor.closest?.('.title-editor__input')))
-      )
+    function isTitleEditor(editor) {
+      if (!editor) return false
+      for (const sel of TITLE_SELECTORS) {
+        const containerSel = sel.split(' .ProseMirror')[0]
+        if (editor.closest?.(containerSel)) return true
+      }
+      return false
     }
-    function pickCandidate(nodes, { titleInput, titleEditor } = {}) {
-      const bodyCandidates = nodes.filter(editor => !isWechatTitleEditor(editor, titleEditor))
+    function pickCandidate(nodes, { titleInput } = {}) {
+      const bodyCandidates = nodes.filter(editor => !isTitleEditor(editor))
       if (bodyCandidates.length === 0) return null
       if (bodyCandidates.length === 1) return bodyCandidates[0]
 
@@ -87,15 +158,23 @@ async function fillWechatContent(title, htmlBody) {
         }
       }
 
+      // 兜底：排除靠近页面顶部的 editor（通常是标题编辑器）
+      const notAtTop = bodyCandidates.filter(editor => {
+        const rect = editor.getBoundingClientRect()
+        return rect.top > 50
+      })
+      if (notAtTop.length > 0) {
+        return notAtTop.sort((a, b) => getEditorArea(b) - getEditorArea(a))[0]
+      }
+
       return bodyCandidates.sort((a, b) => getEditorArea(b) - getEditorArea(a))[0]
     }
 
     const nodes = [...document.querySelectorAll('.ProseMirror')]
     if (nodes.length === 0) return null
 
-    const titleInput = document.querySelector('#title')
-    const titleEditor = document.querySelector('.title-editor__input .ProseMirror')
-    return pickCandidate(nodes, { titleInput, titleEditor })
+    const titleInput = findTitleInput()
+    return pickCandidate(nodes, { titleInput })
   }
 
   async function waitForBodyEditor(timeout = 15000) {
@@ -109,38 +188,70 @@ async function fillWechatContent(title, htmlBody) {
   }
 
   try {
-    const titleInput = await window.waitFor('#title', 15000)
-    const titleEditor = await window.waitFor('.title-editor__input .ProseMirror', 15000)
+    const titleInput = findTitleInput()
+    // 优先用 waitFor 等待标题输入框出现，不限于 #title
+    const waitTitleInput = await window.waitFor(
+      '#title, input[placeholder*="标题"], textarea[placeholder*="标题"], input[id*="title"]',
+      15000
+    )
 
     // 填充标题（优先于正文，避免焦点停留在标题区的 ProseMirror）
-    if ((titleInput || titleEditor) && title) {
-      if (titleEditor) {
-        titleEditor.focus()
-        titleEditor.innerHTML = ''
-        titleEditor.textContent = title
-        titleEditor.dispatchEvent(new Event('input', { bubbles: true }))
-        titleEditor.dispatchEvent(new Event('change', { bubbles: true }))
-      }
+    if (title) {
+      const input = waitTitleInput || titleInput
+      const titleEditorEl = findTitleEditor()
 
-      if (titleInput) {
-        titleInput.focus()
+      // 判断 input 是否可见（微信改版后 #title 是隐藏的 textarea，只是数据同步用）
+      const isInputVisible = input && input.offsetHeight > 0 && input.style?.visibility !== 'hidden'
+
+      // 方式1（优先）：ProseMirror 标题编辑器 — 微信改版后的实际可见标题区
+      if (titleEditorEl) {
+        titleEditorEl.focus()
+        // ProseMirror 需要先全选再替换，确保触发内部状态更新
+        document.execCommand('selectAll', false, null)
+        document.execCommand('insertText', false, title)
+        titleEditorEl.dispatchEvent(new Event('input', { bubbles: true }))
+        console.log('[COSE] 微信标题已填充 (ProseMirror):', title)
       }
-      const nativeSetter =
-        Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set ||
-        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-      if (titleInput && nativeSetter) {
-        nativeSetter.call(titleInput, title)
-      } else if (titleInput) {
-        titleInput.value = title
+      // 方式2：传统可见 input/textarea 元素
+      else if (isInputVisible) {
+        input.focus()
+        const nativeSetter =
+          Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set ||
+          Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+        if (nativeSetter) {
+          nativeSetter.call(input, title)
+        } else {
+          input.value = title
+        }
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+        console.log('[COSE] 微信标题已填充 (input):', title)
       }
-      if (titleInput) {
-        titleInput.dispatchEvent(new Event('input', { bubbles: true }))
-        titleInput.dispatchEvent(new Event('change', { bubbles: true }))
+      // 方式3：隐藏的表单字段兜底（至少同步数据）
+      else if (input) {
+        const nativeSetter =
+          Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set ||
+          Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+        if (nativeSetter) {
+          nativeSetter.call(input, title)
+        } else {
+          input.value = title
+        }
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+        console.log('[COSE] 微信标题已填充 (hidden input 兜底):', title)
+      } else {
+        console.warn('[COSE] 未找到标题输入元素，跳过标题填充')
       }
-      console.log('[COSE] 微信标题已填充:', title)
     }
 
     await new Promise(r => setTimeout(r, 300))
+
+    // 剥离正文中的第一个 h1 标题——标题已单独填入标题输入框，
+    // 保留在正文中会导致 ProseMirror 节点错乱且无法正常删除
+    if (title) {
+      htmlBody = htmlBody.replace(/<h1[^>]*>[\s\S]*?<\/h1>\s*/i, '')
+    }
 
     const editor = await waitForBodyEditor(15000)
     if (!editor) {
@@ -222,12 +333,14 @@ async function fillWechatContent(title, htmlBody) {
       const imageCount = editor.querySelectorAll?.('img').length || 0
       const hasEditorContent = wordCount > 0 || imageCount > 0 || injected
 
+      const titleEditorEl = findTitleEditor()
       return {
         success: hasEditorContent,
         error: hasEditorContent ? undefined : injectError || '正文注入后未检测到有效内容',
         wordCount,
         imageCount,
-        titleFilled: titleInput?.value === title || titleEditor?.textContent?.trim() === title,
+        titleFilled:
+          waitTitleInput?.value === title || titleEditorEl?.textContent?.trim() === title,
       }
     }
 

@@ -62,6 +62,11 @@ function fillToutiaoContentInPage(title, body, imageCache) {
     // 等待编辑器加载
     await new Promise(resolve => setTimeout(resolve, 500))
 
+    // 剥离正文中的第一个 h1 标题——标题已单独填入标题输入框
+    if (title) {
+      body = body.replace(/<h1[^>]*>[\s\S]*?<\/h1>\s*/i, '')
+    }
+
     // 头条使用 ProseMirror 富文本编辑器
     const editor = await waitForElement(() => document.querySelector('.ProseMirror'))
 
@@ -82,10 +87,13 @@ function fillToutiaoContentInPage(title, body, imageCache) {
       cleanBody = cleanBody.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
 
       // 移除阅读时间统计
-      cleanBody = cleanBody.replace(/<blockquote[^>]*>[\s\S]*?阅读大约需[\s\S]*?<\/blockquote>/gi, '')
+      cleanBody = cleanBody.replace(
+        /<blockquote[^>]*>[\s\S]*?阅读大约需[\s\S]*?<\/blockquote>/gi,
+        ''
+      )
 
       // 处理 <figure> 块（图片 + 描述），替换为占位符
-      cleanBody = cleanBody.replace(/<figure[^>]*>([\s\S]*?)<\/figure>/gi, (match) => {
+      cleanBody = cleanBody.replace(/<figure[^>]*>([\s\S]*?)<\/figure>/gi, match => {
         const imgMatch = match.match(/<img[^>]*>/i)
         if (!imgMatch) return ''
         const srcMatch = imgMatch[0].match(/src=["']([^"']+)["']/i)
@@ -104,7 +112,7 @@ function fillToutiaoContentInPage(title, body, imageCache) {
       })
 
       // 处理独立的 <img> 标签（不在 figure 中的）
-      cleanBody = cleanBody.replace(/<img[^>]*>/gi, (match) => {
+      cleanBody = cleanBody.replace(/<img[^>]*>/gi, match => {
         const srcMatch = match.match(/src=["']([^"']+)["']/i)
         const altMatch = match.match(/alt=["']([^"']*)["']/i)
         const src = srcMatch ? srcMatch[1] : ''
@@ -116,21 +124,48 @@ function fillToutiaoContentInPage(title, body, imageCache) {
         return `<p>${placeholder}</p>`
       })
 
+      // 表格样式 + 结构转换：doocs-md table → 头条 ProseMirror 格式
+      // 头条需要 <div class="tableWrapper"><table><tbody><tr><td><p>...</p></td></tr></tbody></table></div>
+      cleanBody = cleanBody.replace(/<table[^>]*>([\s\S]*?)<\/table>/gi, (match, tableInner) => {
+        const rows = []
+        const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
+        let rowMatch
+        while ((rowMatch = rowRegex.exec(tableInner)) !== null) {
+          const cells = []
+          const cellRegex = /<t(h|d)[^>]*>([\s\S]*?)<\/t(h|d)>/gi
+          let cellMatch
+          while ((cellMatch = cellRegex.exec(rowMatch[1])) !== null) {
+            const isTh = cellMatch[1] === 'h'
+            let cellContent = cellMatch[2].trim()
+            if (!/<p[\s>]/i.test(cellContent)) {
+              cellContent = `<p>${cellContent}</p>`
+            }
+            const style = isTh ? ' style="background:#f5f5f5;font-weight:bold;"' : ''
+            cells.push(`<td${style}>${cellContent}</td>`)
+          }
+          if (cells.length > 0) {
+            rows.push(`<tr>${cells.join('')}</tr>`)
+          }
+        }
+        if (rows.length === 0) return ''
+        return `<div class="tableWrapper"><table style="min-width: 112px;"><tbody>${rows.join('')}</tbody></table></div>`
+      })
+
       // 清理属性：移除 class、data-heading、id 等（避免带入自定义样式）
-      cleanBody = cleanBody.replace(/\s+class="[^"]*"/gi, '')
+      // 保留 tableWrapper 的 class（头条 ProseMirror 需要它识别表格容器）
+      cleanBody = cleanBody.replace(/\s+class="(?!tableWrapper")[^"]*"/gi, '')
       cleanBody = cleanBody.replace(/\s+data-heading="[^"]*"/gi, '')
       cleanBody = cleanBody.replace(/\s+data-indexeddb-src="[^"]*"/gi, '')
       cleanBody = cleanBody.replace(/\s+id="[^"]*"/gi, '')
 
-      // 使用 document.execCommand 插入内容（ProseMirror 兼容）
+      // 使用 execCommand 插入（表格已转为头条 ProseMirror 格式）
+      editor.focus()
       const selection = window.getSelection()
       const range = document.createRange()
       range.selectNodeContents(editor)
       range.collapse(false)
       selection.removeAllRanges()
       selection.addRange(range)
-
-      // 使用 insertHTML 命令
       document.execCommand('insertHTML', false, cleanBody)
 
       // 触发事件让 ProseMirror 同步
@@ -145,9 +180,13 @@ function fillToutiaoContentInPage(title, body, imageCache) {
         el.focus()
         const dt = new DataTransfer()
         dt.items.add(file)
-        el.dispatchEvent(new ClipboardEvent('paste', {
-          bubbles: true, cancelable: true, clipboardData: dt,
-        }))
+        el.dispatchEvent(
+          new ClipboardEvent('paste', {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: dt,
+          })
+        )
       }
 
       // 等待新可见 <img> 出现（MutationObserver，最多 10 秒）
@@ -159,7 +198,7 @@ function fillToutiaoContentInPage(title, body, imageCache) {
 
       // 等待新的图片卡片完全渲染（包括描述区域）
       function waitForNewImgCard(container, countBefore) {
-        return new Promise((resolve) => {
+        return new Promise(resolve => {
           function check() {
             const imgs = getVisibleImgs(container)
             if (imgs.length > countBefore) {
@@ -183,7 +222,10 @@ function fillToutiaoContentInPage(title, body, imageCache) {
             }
           })
           observer.observe(container, { childList: true, subtree: true })
-          setTimeout(() => { observer.disconnect(); resolve(null) }, 15000)
+          setTimeout(() => {
+            observer.disconnect()
+            resolve(null)
+          }, 15000)
         })
       }
 
@@ -238,14 +280,19 @@ function fillToutiaoContentInPage(title, body, imageCache) {
                 // 聚焦描述输入框，模拟用户输入
                 captionInput.focus()
                 await new Promise(r => setTimeout(r, 100))
-                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                  window.HTMLTextAreaElement.prototype,
+                  'value'
+                )?.set
                 if (nativeSetter) {
                   nativeSetter.call(captionInput, alt)
                 } else {
                   captionInput.value = alt
                 }
                 // 触发多种事件确保 ProseMirror 感知变化
-                captionInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: alt, inputType: 'insertText' }))
+                captionInput.dispatchEvent(
+                  new InputEvent('input', { bubbles: true, data: alt, inputType: 'insertText' })
+                )
                 captionInput.dispatchEvent(new Event('change', { bubbles: true }))
                 captionInput.dispatchEvent(new Event('blur', { bubbles: true }))
               }
@@ -258,7 +305,9 @@ function fillToutiaoContentInPage(title, body, imageCache) {
           }
 
           imageCount++
-          console.log(`[COSE] 头条图片已粘贴: ${cached.filename} (${(file.size / 1024).toFixed(1)}KB)`)
+          console.log(
+            `[COSE] 头条图片已粘贴: ${cached.filename} (${(file.size / 1024).toFixed(1)}KB)`
+          )
         }
       }
 
@@ -266,7 +315,9 @@ function fillToutiaoContentInPage(title, body, imageCache) {
       editor.dispatchEvent(new InputEvent('input', { bubbles: true }))
       editor.dispatchEvent(new Event('change', { bubbles: true }))
 
-      console.log(`[COSE] 头条内容填充完成: ${imagePlaceholders.length} 张图片占位, ${imageCount} 张已粘贴`)
+      console.log(
+        `[COSE] 头条内容填充完成: ${imagePlaceholders.length} 张图片占位, ${imageCount} 张已粘贴`
+      )
       return { success: true }
     } else {
       console.log('[COSE] 头条未找到编辑器')
@@ -296,7 +347,12 @@ async function syncToutiaoContent(tab, content, helpers) {
   // 先注入公共工具函数
   await injectUtils(chrome, tab.id)
 
-  console.log('[COSE] 开始注入头条填充函数, body长度:', (content.body || '').length, 'imageCache keys:', imageCache ? Object.keys(imageCache).length : 0)
+  console.log(
+    '[COSE] 开始注入头条填充函数, body长度:',
+    (content.body || '').length,
+    'imageCache keys:',
+    imageCache ? Object.keys(imageCache).length : 0
+  )
 
   // 在页面中执行填充（传入 body 和 imageCache）
   let result
@@ -304,7 +360,7 @@ async function syncToutiaoContent(tab, content, helpers) {
     result = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: fillToutiaoContentInPage,
-      args: [content.title, content.body || '', imageCache || null],
+      args: [content.title, content.wechatHtml || content.body || '', imageCache || null],
       world: 'MAIN',
     })
   } catch (e) {

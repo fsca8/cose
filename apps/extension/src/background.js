@@ -2,7 +2,13 @@
 import { PLATFORMS, LOGIN_CHECK_CONFIG, SYNC_HANDLERS } from '@cose/core/src/platforms/index.js'
 import { qianfanIntercept } from '@cose/core/src/platforms/qianfan.js'
 import { convertAvatarToBase64 } from '@cose/detection/src/utils.js'
-import { downloadAllImages, serializeImageCache, extractDataUrlImages, stripDataUrlImages, replaceImagesViaPaste } from '@cose/core/src/image-utils.js'
+import {
+  downloadAllImages,
+  serializeImageCache,
+  extractDataUrlImages,
+  stripDataUrlImages,
+  replaceImagesViaPaste,
+} from '@cose/core/src/image-utils.js'
 import { injectUtils } from '@cose/core/src/utils.js'
 // [DISABLED] import { fillAlipayOpenContent } from '@cose/core/src/platforms/alipayopen.js'
 
@@ -695,7 +701,11 @@ async function syncToPlatform(platformId, content) {
 
     // 预下载所有外部图片，跳过已有缓存的
     try {
-      const imageCache = await downloadAllImages(content, 3, new Set(Object.keys(serializedImageCache)))
+      const imageCache = await downloadAllImages(
+        content,
+        3,
+        new Set(Object.keys(serializedImageCache))
+      )
       if (imageCache.size > 0) {
         Object.assign(serializedImageCache, await serializeImageCache(imageCache))
       }
@@ -708,7 +718,11 @@ async function syncToPlatform(platformId, content) {
     if (dataUrlImages.length > 0) {
       for (const dataUrl of dataUrlImages) {
         const ext = dataUrl.match(/image\/([a-zA-Z]+)/)?.[1] || 'png'
-        serializedImageCache[dataUrl] = { dataUrl, filename: `image.${ext}`, mimeType: `image/${ext}` }
+        serializedImageCache[dataUrl] = {
+          dataUrl,
+          filename: `image.${ext}`,
+          mimeType: `image/${ext}`,
+        }
       }
       console.log(`[COSE] 提取到 ${dataUrlImages.length} 张 data URL 图片`)
     }
@@ -971,7 +985,11 @@ async function syncToPlatform(platformId, content) {
               }
 
               // 注入 HTML 内容（自动处理图片）
-              const { wordCount, imageCount } = await window.injectHtmlWithImages(contentEditor, htmlBody, imageCache)
+              const { wordCount, imageCount } = await window.injectHtmlWithImages(
+                contentEditor,
+                htmlBody,
+                imageCache
+              )
               console.log(`[COSE] 小红书内容已注入: ${wordCount} 字, ${imageCount} 张图片`)
 
               const pasteEvent = new ClipboardEvent('paste', {
@@ -987,8 +1005,8 @@ async function syncToPlatform(platformId, content) {
               await new Promise(r => setTimeout(r, 500))
 
               // 验证内容是否注入成功
-              const wordCount = contentEditor.textContent?.length || 0
-              if (wordCount === 0) {
+              const verifiedWordCount = contentEditor.textContent?.length || 0
+              if (verifiedWordCount === 0) {
                 // 备用方案：直接设置 innerHTML
                 console.log('[COSE] paste 事件未生效，尝试备用方案')
                 contentEditor.innerHTML = htmlBody
@@ -1346,7 +1364,11 @@ async function syncToPlatform(platformId, content) {
               contentEl.focus()
 
               // 注入 HTML 内容（自动处理图片）
-              const { imageCount } = await window.injectHtmlWithImages(contentEl, htmlContent, imageCache)
+              const { imageCount } = await window.injectHtmlWithImages(
+                contentEl,
+                htmlContent,
+                imageCache
+              )
               console.log(`[COSE] Twitter Articles 内容已注入, ${imageCount} 张图片`)
 
               const pasteEvent = new ClipboardEvent('paste', {
@@ -1373,7 +1395,11 @@ async function syncToPlatform(platformId, content) {
 
       const result = fillResult?.[0]?.result
       if (!result?.success) {
-        return { success: false, message: result?.error || 'Twitter Articles 内容填充失败', tabId: tab.id }
+        return {
+          success: false,
+          message: result?.error || 'Twitter Articles 内容填充失败',
+          tabId: tab.id,
+        }
       }
 
       console.log('[COSE] Twitter Articles 内容填充成功，图片:', result.images || 0)
@@ -1543,7 +1569,9 @@ async function syncToPlatform(platformId, content) {
                       await new Promise(r => setTimeout(r, 300))
                       await window.pasteImageFile(contentEditor, file)
                       imageCount++
-                      console.log(`[COSE] 百度千帆图片已替换(${i + 1}/${images.length}): ${cached.filename}`)
+                      console.log(
+                        `[COSE] 百度千帆图片已替换(${i + 1}/${images.length}): ${cached.filename}`
+                      )
                     } catch (err) {
                       console.warn(`[COSE] 百度千帆图片替换失败:`, err.message)
                     }
@@ -1653,7 +1681,29 @@ async function syncToPlatform(platformId, content) {
     // 微信公众号：直接注入 HTML 到编辑器
     if (platformId === 'wechat') {
       // 使用剪贴板 HTML（带完整样式）或降级到 body
-      const htmlContent = content.wechatHtml || content.body
+      let htmlContent = content.wechatHtml || content.body
+      // 修复双重圆点：去掉 doocs-md 渲染器添加的 "• " 文本前缀
+      // doocs-md listitem() 同时加了 "• " 文本 + CSS list-style: circle，微信两者都渲染导致双圆点
+      if (htmlContent) {
+        htmlContent = htmlContent.replace(/<li[^>]*>\s*•\s/g, '<li>')
+      }
+      // 修复表格：doocs-md 表格样式全靠 CSS class，微信会丢掉 <style> 块导致表格变纯文字
+      // 给 table/th/td 注入 inline 样式确保微信正确渲染
+      if (htmlContent && htmlContent.includes('<table')) {
+        htmlContent = htmlContent
+          .replace(
+            /<table class="preview-table">/g,
+            '<table style="border-collapse:collapse;width:100%;margin:1em 0;font-size:14px;">'
+          )
+          .replace(
+            /<th class="th"/g,
+            '<th style="border:1px solid #ddd;padding:8px 12px;background:#f5f5f5;font-weight:bold;text-align:left"'
+          )
+          .replace(
+            /<td class="td"/g,
+            '<td style="border:1px solid #ddd;padding:8px 12px;text-align:left"'
+          )
+      }
       console.log('[COSE] 微信 HTML 内容长度:', htmlContent?.length || 0)
 
       // 等待额外时间确保编辑器完全加载
@@ -1805,7 +1855,9 @@ async function syncToPlatform(platformId, content) {
       if (serializedImageCache && Object.keys(serializedImageCache).length > 0) {
         console.log('[COSE] 开始替换微信编辑器中的 data URL 图片...')
         const imgResult = await replaceImagesViaPaste(tab.id, chrome, serializedImageCache)
-        console.log(`[COSE] 微信图片替换完成: ${imgResult.replaced}/${imgResult.total} 成功, ${imgResult.failed} 失败`)
+        console.log(
+          `[COSE] 微信图片替换完成: ${imgResult.replaced}/${imgResult.total} 成功, ${imgResult.failed} 失败`
+        )
         if (imgResult.errors?.length > 0) {
           console.warn('[COSE] 图片替换错误:', imgResult.errors)
         }
@@ -1956,7 +2008,12 @@ async function syncToPlatform(platformId, content) {
         return { success: false, message: fillResult?.error || '内容填充失败', tabId: tab.id }
       }
 
-      console.log('[COSE] 抖音内容填充成功，字数:', fillResult.wordCount, '图片:', fillResult.images || 0)
+      console.log(
+        '[COSE] 抖音内容填充成功，字数:',
+        fillResult.wordCount,
+        '图片:',
+        fillResult.images || 0
+      )
       return { success: true, message: '已同步到抖音', tabId: tab.id }
     }
 
@@ -2127,7 +2184,9 @@ async function syncToPlatform(platformId, content) {
                 await new Promise(r => setTimeout(r, 300))
                 await window.pasteImageFile(editorBody, file)
                 imageCount++
-                console.log(`[COSE] B站专栏图片已替换(${i + 1}/${images.length}): ${cached.filename}`)
+                console.log(
+                  `[COSE] B站专栏图片已替换(${i + 1}/${images.length}): ${cached.filename}`
+                )
               } catch (err) {
                 console.warn(`[COSE] B站图片替换失败:`, err.message)
               }
@@ -2293,7 +2352,9 @@ async function syncToPlatform(platformId, content) {
             let imageCount = 0
             if (imageCache) {
               await new Promise(r => setTimeout(r, 1500))
-              const preview = document.querySelector('.markdown-preview, .preview, [class*="preview"]')
+              const preview = document.querySelector(
+                '.markdown-preview, .preview, [class*="preview"]'
+              )
               const container = preview || document.body
               const cacheEntries = Object.entries(imageCache)
               const images = Array.from(container.querySelectorAll('img'))
@@ -2311,7 +2372,9 @@ async function syncToPlatform(platformId, content) {
                   await new Promise(r => setTimeout(r, 300))
                   await window.pasteImageFile(container, file)
                   imageCount++
-                  console.log(`[COSE] 阿里云图片已替换(${i + 1}/${images.length}): ${cached.filename}`)
+                  console.log(
+                    `[COSE] 阿里云图片已替换(${i + 1}/${images.length}): ${cached.filename}`
+                  )
                 } catch (err) {
                   console.warn(`[COSE] 阿里云图片替换失败:`, err.message)
                 }
@@ -2972,78 +3035,98 @@ async function syncToPlatform(platformId, content) {
           // 等待一下再填充内容
           await new Promise(r => setTimeout(r, 500))
 
-                // 提取原始 HTML 中的公式（包含完整 SVG）
-                const tempDiv = document.createElement('div')
-                tempDiv.innerHTML = htmlBody
-                const originalFormulas = []
-                tempDiv
-                  .querySelectorAll('.katex-inline, .katex-block, section.katex-block')
-                  .forEach((formula, index) => {
-                    const svg = formula.querySelector('svg')
-                    if (svg && svg.innerHTML) {
-                      originalFormulas.push({
-                        index,
-                        className: formula.className,
-                        fullHtml: formula.outerHTML,
-                      })
-                    }
-                  })
-                console.log('[COSE] 百家号提取到', originalFormulas.length, '个公式')
+          // 提取原始 HTML 中的公式（包含完整 SVG）
+          const tempDiv = document.createElement('div')
+          tempDiv.innerHTML = htmlBody
+          const originalFormulas = []
+          tempDiv
+            .querySelectorAll('.katex-inline, .katex-block, section.katex-block')
+            .forEach((formula, index) => {
+              const svg = formula.querySelector('svg')
+              if (svg && svg.innerHTML) {
+                originalFormulas.push({
+                  index,
+                  className: formula.className,
+                  fullHtml: formula.outerHTML,
+                })
+              }
+            })
+          console.log('[COSE] 百家号提取到', originalFormulas.length, '个公式')
 
-                // 先用 setContent 设置内容（公式 SVG 会被过滤）
-                editor.setContent(htmlBody)
+          let injected = false
 
-                // 然后直接向 iframe 注入完整的公式 SVG
-                if (originalFormulas.length > 0) {
-                  setTimeout(() => {
-                    const iframe = document.querySelector('iframe')
-                    if (iframe && iframe.contentDocument) {
-                      const iframeDoc = iframe.contentDocument
-                      const emptyFormulas = iframeDoc.querySelectorAll(
-                        '.katex-inline, .katex-block, section.katex-block'
-                      )
+          // 优先用 UEditor API
+          try {
+            const ueEditor = typeof UE !== 'undefined' ? UE.getEditor('ueditor_0') : null
+            if (ueEditor && typeof ueEditor.setContent === 'function') {
+              ueEditor.setContent(htmlBody)
+              await new Promise(r => setTimeout(r, 500))
 
-                      emptyFormulas.forEach((emptyFormula, index) => {
-                        const original = originalFormulas[index]
-                        if (original) {
-                          // 创建新元素并替换
-                          const newElement = document.createElement('div')
-                          newElement.innerHTML = original.fullHtml
-                          const newFormula = newElement.firstElementChild
-                          if (newFormula && emptyFormula.parentNode) {
-                            emptyFormula.parentNode.replaceChild(newFormula, emptyFormula)
-                          }
+              // 恢复公式 SVG
+              if (originalFormulas.length > 0) {
+                setTimeout(() => {
+                  const iframe = document.querySelector('iframe')
+                  if (iframe && iframe.contentDocument) {
+                    const iframeDoc = iframe.contentDocument
+                    const emptyFormulas = iframeDoc.querySelectorAll(
+                      '.katex-inline, .katex-block, section.katex-block'
+                    )
+                    emptyFormulas.forEach((emptyFormula, index) => {
+                      const original = originalFormulas[index]
+                      if (original) {
+                        const newElement = document.createElement('div')
+                        newElement.innerHTML = original.fullHtml
+                        const newFormula = newElement.firstElementChild
+                        if (newFormula && emptyFormula.parentNode) {
+                          emptyFormula.parentNode.replaceChild(newFormula, emptyFormula)
                         }
-                      })
-
-                      console.log('[COSE] 百家号公式 SVG 已恢复')
-                      editor.fireEvent('contentChange')
-                    }
-                  }, 300)
-                }
-              })
-              console.log('[COSE] 百家号提取到', originalFormulas.length, '个公式')
-
-                editor.fireEvent('contentChange')
-                editor.fireEvent('selectionchange')
-                console.log('[COSE] 百家号通过 UEditor API 填充成功')
-                return
-              } catch (e) {
-                console.log('[COSE] 百家号 UEditor API 调用失败', e)
+                      }
+                    })
+                    console.log('[COSE] 百家号公式 SVG 已恢复')
+                    ueEditor.fireEvent('contentChange')
+                  }
+                }, 300)
               }
 
-              editor.fireEvent('contentChange');
-              editor.fireEvent('selectionchange');
+              ueEditor.fireEvent('contentChange')
+              ueEditor.fireEvent('selectionchange')
               console.log('[COSE] 百家号通过 UEditor API 填充成功')
+              injected = true
+            }
+          } catch (e) {
+            console.log('[COSE] 百家号 UEditor API 调用失败', e)
+          }
 
-              // 图片处理：百家号使用 UEditor iframe，图片在 iframe 内
-              // 由于无法直接操作 iframe 内的图片粘贴，跳过图片替换
-              console.log('[COSE] 百家号同步完成（UEditor iframe，跳过图片粘贴替换）')
-              return
-            } catch (e) {
-              console.log('[COSE] 百家号 UEditor API 调用失败', e)
+          if (!injected) {
+            // 兜底：paste 事件注入
+            const bodyEditor =
+              document.querySelector('[contenteditable="true"]:not([class*="title"])') ||
+              document.querySelector(
+                '.client_components_articleRichEditor [contenteditable="true"]'
+              ) ||
+              document.querySelector('[class*="richEditor"] [contenteditable="true"]')
+
+            if (bodyEditor) {
+              const dt = new DataTransfer()
+              dt.setData('text/html', htmlBody)
+              dt.setData('text/plain', htmlBody.replace(/<[^>]*>/g, ''))
+              bodyEditor.dispatchEvent(
+                new ClipboardEvent('paste', {
+                  bubbles: true,
+                  cancelable: true,
+                  clipboardData: dt,
+                })
+              )
+              console.log('[COSE] 百家号通过 paste 事件注入')
+            } else {
+              console.warn('[COSE] 百家号未找到正文编辑器')
             }
           }
+
+          // 图片处理：百家号使用 UEditor iframe，图片在 iframe 内
+          // 由于无法直接操作 iframe 内的图片粘贴，跳过图片替换
+          console.log('[COSE] 百家号同步完成（UEditor iframe，跳过图片粘贴替换）')
+          return { success: true, method: injected ? 'ueditor' : 'paste', length: htmlBody.length }
         },
         args: [content.title, htmlContent, serializedImageCache || null],
         world: 'MAIN',
@@ -3090,24 +3173,19 @@ async function syncToPlatform(platformId, content) {
           }
 
           // 等待一下再填充内容
-          setTimeout(() => {
-            // 找到 ProseMirror 编辑器
-            const editor =
-              document.querySelector('.ProseMirror') ||
-              document.querySelector('[contenteditable="true"]')
-
           // 找到 ProseMirror 编辑器
-          const editor = document.querySelector('.ProseMirror') ||
+          const editor =
+            document.querySelector('.ProseMirror') ||
             document.querySelector('[contenteditable="true"]')
 
           if (editor && htmlBody) {
             editor.focus()
 
-              const pasteEvent = new ClipboardEvent('paste', {
-                bubbles: true,
-                cancelable: true,
-                clipboardData: dt,
-              })
+            const pasteEvent = new ClipboardEvent('paste', {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: dt,
+            })
 
             return { success: true, images: imageCount }
           }
@@ -3224,7 +3302,11 @@ async function syncToPlatform(platformId, content) {
               editor.innerHTML = ''
 
               // 注入 HTML 内容（自动处理图片）
-              const { wordCount, imageCount } = await window.injectHtmlWithImages(editor, htmlBody, imageCache)
+              const { wordCount, imageCount } = await window.injectHtmlWithImages(
+                editor,
+                htmlBody,
+                imageCache
+              )
               console.log(`[COSE] 支付宝开放平台内容已注入: ${wordCount} 字, ${imageCount} 张图片`)
 
               const pasteEvent = new ClipboardEvent('paste', {
@@ -3240,8 +3322,8 @@ async function syncToPlatform(platformId, content) {
               await new Promise(r => setTimeout(r, 500))
 
               // 验证内容是否注入成功
-              const wordCount = editor.textContent?.length || 0
-              if (wordCount === 0) {
+              const verifiedWordCount = editor.textContent?.length || 0
+              if (verifiedWordCount === 0) {
                 // 备用方案：直接设置 innerHTML
                 console.log('[COSE] paste 事件未生效，尝试备用方案')
                 editor.innerHTML = htmlBody
@@ -3263,7 +3345,11 @@ async function syncToPlatform(platformId, content) {
 
       const result = fillResult?.[0]?.result
       if (!result?.success) {
-        return { success: false, message: result?.error || '支付宝开放平台内容填充失败', tabId: tab.id }
+        return {
+          success: false,
+          message: result?.error || '支付宝开放平台内容填充失败',
+          tabId: tab.id,
+        }
       }
 
       console.log('[COSE] 支付宝开放平台内容填充成功，图片:', result.images || 0)
@@ -3402,7 +3488,9 @@ async function syncToPlatform(platformId, content) {
                       await new Promise(r => setTimeout(r, 300))
                       await window.pasteImageFile(vditorWysiwyg, file)
                       imageCount++
-                      console.log(`[COSE] 电子发烧友图片已替换(${i + 1}/${images.length}): ${cached.filename}`)
+                      console.log(
+                        `[COSE] 电子发烧友图片已替换(${i + 1}/${images.length}): ${cached.filename}`
+                      )
                     } catch (err) {
                       console.warn(`[COSE] 电子发烧友图片替换失败:`, err.message)
                     }
@@ -3410,7 +3498,12 @@ async function syncToPlatform(platformId, content) {
                   }
                 }
 
-                return { success: true, method: 'vditor-paste', length: wordCount, images: imageCount }
+                return {
+                  success: true,
+                  method: 'vditor-paste',
+                  length: wordCount,
+                  images: imageCount,
+                }
               }
 
               // 备用方案：直接设置 textContent（Vditor 会自动解析 Markdown）
@@ -3452,7 +3545,12 @@ async function syncToPlatform(platformId, content) {
               }
 
               console.log(`[COSE] 电子发烧友 CodeMirror 内容已填充: ${imageCount} 张图片`)
-              return { success: true, method: 'codemirror', length: markdown.length, images: imageCount }
+              return {
+                success: true,
+                method: 'codemirror',
+                length: markdown.length,
+                images: imageCount,
+              }
             }
 
             // 尝试查找 textarea

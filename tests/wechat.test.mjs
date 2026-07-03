@@ -172,6 +172,13 @@ async function withWechatFillEnvironment({ jsapiInvoke, bodyEditor, callback }) 
       if (selector === '.title-editor__input .ProseMirror') return titleEditor
       return null
     },
+    execCommand: (cmd, showUI, value) => {
+      if (cmd === 'insertText' && document.activeElement) {
+        document.activeElement.textContent = value
+      }
+      return true
+    },
+    activeElement: null,
   }
 
   try {

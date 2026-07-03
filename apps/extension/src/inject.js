@@ -497,6 +497,7 @@
         const hasWeibo = syncAccounts.some(a => (a.uid || a.type) === 'weibo')
         const hasXiaohongshu = syncAccounts.some(a => (a.uid || a.type) === 'xiaohongshu')
         let clipboardHtmlContent = null
+        const hasToutiao = syncAccounts.some(a => (a.uid || a.type) === 'toutiao')
         if (
           hasWechat ||
           hasBaijiahao ||
@@ -505,7 +506,8 @@
           hasSspai ||
           hasBilibili ||
           hasWeibo ||
-          hasXiaohongshu
+          hasXiaohongshu ||
+          hasToutiao
         ) {
           // 先点击复制按钮，将带样式的内容复制到剪贴板
           const copyBtn =
@@ -629,7 +631,8 @@
                   platformId === 'sspai' ||
                   platformId === 'bilibili' ||
                   platformId === 'weibo' ||
-                  platformId === 'xiaohongshu'
+                  platformId === 'xiaohongshu' ||
+                  platformId === 'toutiao'
                     ? clipboardHtmlContent
                     : null,
               },
