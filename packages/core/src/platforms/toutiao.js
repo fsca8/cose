@@ -92,6 +92,23 @@ function fillToutiaoContentInPage(title, body, imageCache) {
         ''
       )
 
+      // 修复列表双前缀：去掉 doocs-md 渲染器添加的文本前缀
+      // doocs-md listitem() 同时加了 "• " / "1. " 文本 + CSS list-style，头条两者都渲染导致重复
+      cleanBody = cleanBody.replace(/<li[^>]*>\s*•\s/g, '<li>') // 无序列表：去掉 "• "
+      cleanBody = cleanBody.replace(/<li[^>]*>\s*\d+\.\s/g, '<li>') // 有序列表：去掉 "1. " "2. " 等
+
+      // 修复代码块：去掉 mac-sign（macOS 红绿灯圆点），去掉多余 class，<br/> 转回 \n
+      // doocs-md 的 Fo() 把 \n 转成了 <br/>，但头条 ProseMirror 的 <pre> 节点期望真实换行符
+      cleanBody = cleanBody.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (match, inner) => {
+        // 去掉 mac-sign span
+        let content = inner.replace(/<span[^>]*class="mac-sign"[^>]*>[\s\S]*?<\/span>/gi, '')
+        // <br/> 和 <br> 转回真实换行
+        content = content.replace(/<br\s*\/?>/gi, '\n')
+        // 去掉 <code> 的多余 class（保留标签结构）
+        content = content.replace(/<code[^>]*class="[^"]*language-([^"]*)"[^>]*>/gi, '<code>')
+        return '<pre>' + content + '</pre>'
+      })
+
       // 处理 <figure> 块（图片 + 描述），替换为占位符
       cleanBody = cleanBody.replace(/<figure[^>]*>([\s\S]*?)<\/figure>/gi, match => {
         const imgMatch = match.match(/<img[^>]*>/i)

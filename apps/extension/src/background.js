@@ -1682,10 +1682,11 @@ async function syncToPlatform(platformId, content) {
     if (platformId === 'wechat') {
       // 使用剪贴板 HTML（带完整样式）或降级到 body
       let htmlContent = content.wechatHtml || content.body
-      // 修复双重圆点：去掉 doocs-md 渲染器添加的 "• " 文本前缀
-      // doocs-md listitem() 同时加了 "• " 文本 + CSS list-style: circle，微信两者都渲染导致双圆点
+      // 修复列表双前缀：去掉 doocs-md 渲染器添加的文本前缀
+      // doocs-md listitem() 同时加了 "• " / "1. " 文本 + CSS list-style，微信两者都渲染导致重复
       if (htmlContent) {
-        htmlContent = htmlContent.replace(/<li[^>]*>\s*•\s/g, '<li>')
+        htmlContent = htmlContent.replace(/<li[^>]*>\s*•\s/g, '<li>') // 无序列表：去掉 "• "
+        htmlContent = htmlContent.replace(/<li[^>]*>\s*\d+\.\s/g, '<li>') // 有序列表：去掉 "1. " "2. " 等
       }
       // 修复表格：doocs-md 表格样式全靠 CSS class，微信会丢掉 <style> 块导致表格变纯文字
       // 给 table/th/td 注入 inline 样式确保微信正确渲染
