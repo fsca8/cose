@@ -53,6 +53,16 @@ function fillWangyihaoContent(title, htmlBody) {
         editor.innerHTML = ''
       }
 
+      // 剥离正文中的第一个 h1 标题——标题已单独填入标题输入框
+      if (title) {
+        htmlBody = htmlBody.replace(/<h1[^>]*>[\s\S]*?<\/h1>\s*/i, '')
+      }
+
+      // 修复列表双前缀：去掉 doocs-md 渲染器添加的文本前缀
+      // doocs-md listitem() 同时加了 "• " / "1. " 文本 + CSS list-style，网易号两者都渲染导致重复
+      htmlBody = htmlBody.replace(/<li[^>]*>\s*•\s/g, '<li>') // 无序列表：去掉 "• "
+      htmlBody = htmlBody.replace(/<li[^>]*>\s*\d+\.\s/g, '<li>') // 有序列表：去掉 "1. " "2. " 等
+
       // 通过 paste 事件注入 HTML 内容
       const dt = new DataTransfer()
       dt.setData('text/html', htmlBody)
