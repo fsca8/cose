@@ -86,6 +86,16 @@ function fillToutiaoContentInPage(title, body, imageCache) {
       // 移除 <style> 标签
       cleanBody = cleanBody.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
 
+      // 头条 ProseMirror 不支持 <span> 内联样式，转 <span style=...> 为裸文本
+      // 保留 <br> 换行以便阅读
+      cleanBody = cleanBody.replace(
+        /<span[^>]*style=["'][^"']*color:\s*#[a-f0-9]+[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi,
+        (match, inner) => {
+          // <br/> 转文本换行
+          return inner.replace(/<br\s*\/?>/gi, '\n')
+        }
+      )
+
       // 移除阅读时间统计
       cleanBody = cleanBody.replace(
         /<blockquote[^>]*>[\s\S]*?阅读大约需[\s\S]*?<\/blockquote>/gi,
